@@ -9,11 +9,15 @@ dependencies = [
     "gymnasium>=1.2.0",
     "torch>=2.8.0",
     "torchvision>=0.23.0",
+    "matplotlib>=3.7.0",
+    "opencv-python>=4.12.0.88",
+    "moviepy>=2.2.1"
 ]
 
 [tool.uv]
 required-environments = [
     "sys_platform == 'win32'"
+#    "sys_platform == 'darwin'" #MacOS
 ]
 
 [[tool.uv.index]]
