@@ -1,7 +1,7 @@
 [project]
-name = "rl-demonattack"
+name = "dqn-demon-attack"
 version = "0.1.0"
-description = "Add your description here"
+description = "Deep Q-Network implementation for Atari DemonAttack"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,13 +11,24 @@ dependencies = [
     "torchvision>=0.23.0",
     "matplotlib>=3.7.0",
     "opencv-python>=4.12.0.88",
-    "moviepy>=2.2.1"
+    "moviepy>=2.2.1",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
 ]
+
+[project.scripts]
+train = "dqn_demon_attack.scripts.train:main"
+eval = "dqn_demon_attack.scripts.eval:evaluate"
+watch = "dqn_demon_attack.scripts.watch:main"
+viz = "dqn_demon_attack.utils.viz:main"
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.uv]
 required-environments = [
     "sys_platform == 'win32'"
-#    "sys_platform == 'darwin'" #MacOS
 ]
 
 [[tool.uv.index]]

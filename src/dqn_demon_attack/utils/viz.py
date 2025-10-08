@@ -1,22 +1,54 @@
-import csv, argparse
+"""
+Training log visualization utilities.
+
+Reads CSV log files and generates plots for key training metrics including
+episode returns, episode length, loss, Q-values, and exploration epsilon.
+"""
+
+import argparse
+import csv
+
 import matplotlib.pyplot as plt
 
 
 def moving_average(xs, k=20):
-    if k <= 1: return xs
+    """
+    Compute moving average over a sequence.
+
+    Args:
+        xs: Input sequence of values.
+        k: Window size for moving average.
+
+    Returns:
+        List of moving averaged values with same length as input.
+    """
+    if k <= 1:
+        return xs
+
     out = []
     s = 0.0
     q = []
+
     for x in xs:
         q.append(x)
         s += x
         if len(q) > k:
             s -= q.pop(0)
         out.append(s / len(q))
+
     return out
 
 
 def read_csv(path):
+    """
+    Read CSV file into list of dictionaries.
+
+    Args:
+        path: Path to CSV file.
+
+    Returns:
+        List of row dictionaries.
+    """
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -25,20 +57,43 @@ def read_csv(path):
 
 
 def to_float(xs, key):
+    """
+    Extract float values from CSV rows.
+
+    Args:
+        xs: List of row dictionaries.
+        key: Column key to extract.
+
+    Returns:
+        List of float values, with NaN for invalid entries.
+    """
     out = []
     for r in xs:
         try:
             out.append(float(r[key]))
-        except:
+        except Exception:
             out.append(float("nan"))
     return out
 
 
 def plot_series(x, y, title, xlabel, ylabel, smooth=50):
+    """
+    Plot a time series with optional smoothing.
+
+    Args:
+        x: X-axis values.
+        y: Y-axis values.
+        title: Plot title.
+        xlabel: X-axis label.
+        ylabel: Y-axis label.
+        smooth: Window size for moving average smoothing. Set to 1 or None to disable.
+    """
     plt.figure()
+
     if smooth and smooth > 1:
         y_s = moving_average(y, k=smooth)
         plt.plot(x, y_s, label=f"{ylabel} (MA{smooth})")
+
     plt.plot(x, y, alpha=0.3, label=ylabel)
     plt.title(title)
     plt.xlabel(xlabel)
@@ -50,6 +105,12 @@ def plot_series(x, y, title, xlabel, ylabel, smooth=50):
 
 
 def main(log_path):
+    """
+    Generate training metric plots from CSV log.
+
+    Args:
+        log_path: Path to training log CSV file.
+    """
     rows = read_csv(log_path)
     step = to_float(rows, "step")
     ep_return_raw = to_float(rows, "ep_return_raw")
@@ -68,7 +129,7 @@ def main(log_path):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--log", type=str, default="runs/exp1/train_log.csv")
+    parser = argparse.ArgumentParser(description="Visualize training logs")
+    parser.add_argument("--log", type=str, default="runs/exp1/train_log.csv", help="Path to training log CSV")
     args = parser.parse_args()
     main(args.log)

@@ -1,0 +1,47 @@
+# Noisy Dueling DQN Configuration
+# Combines Dueling Networks (Wang et al., 2016) and Noisy Networks (Fortunato et al., 2017)
+
+# Experiment Settings
+exp_name: noisy_dueling_dqn
+total_steps: 3000000
+eval_every: 100000
+seed: 42
+device: cuda
+
+# Environment Settings
+terminal_on_life_loss: true
+screen_size: 84
+frame_stack: 4
+
+# Model Settings
+model_type: NoisyDuelingDQN  # Noisy + Dueling
+reward_mode: clip
+
+# Training Hyperparameters
+gamma: 0.99
+lr: 0.0000625  # Lower LR for stability
+batch_size: 32
+replay_size: 500000  # Very large buffer
+warmup: 50000  # Longer warmup
+target_update_freq: 8000
+grad_clip: 10.0
+
+# Exploration Settings (unused with Noisy Networks)
+eps_start: 0.0  # No epsilon-greedy with Noisy Networks
+eps_end: 0.0
+eps_decay_steps: 1
+
+# Advanced Features
+use_double_dqn: true
+use_prioritized_replay: true  # Using PER
+per_alpha: 0.6
+per_beta_start: 0.4
+per_beta_frames: 1000000
+
+# Reward Shaping
+use_reward_shaping: false
+use_life_penalty: false
+life_penalty: -1.0
+use_streak_bonus: false
+streak_window: 12
+streak_bonus: 0.1
