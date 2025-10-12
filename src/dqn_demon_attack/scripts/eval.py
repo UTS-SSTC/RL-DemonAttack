@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from gymnasium.spaces import Discrete
 
-from dqn_demon_attack.agents import DQN
+from dqn_demon_attack.agents import DQN, DuelingDQN, NoisyDQN, NoisyDuelingDQN
 from dqn_demon_attack.envs import make_env
 
 
@@ -52,6 +52,8 @@ def load_model(ckpt_path, n_actions):
     """
     Load a trained DQN model from checkpoint.
 
+    Automatically detects model architecture based on checkpoint keys.
+
     Args:
         ckpt_path: Path to the checkpoint file.
         n_actions: Number of actions in the environment.
@@ -60,8 +62,22 @@ def load_model(ckpt_path, n_actions):
         Loaded DQN model.
     """
     ckpt = torch.load(ckpt_path, map_location="cpu")
-    q = DQN(n_actions)
-    q.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+
+    # Detect model architecture from state dict keys
+    has_adv_val = any(k.startswith("adv.") or k.startswith("val.") for k in state_dict.keys())
+    has_noisy = any("_sigma" in k or "_epsilon" in k for k in state_dict.keys())
+
+    if has_adv_val and has_noisy:
+        q = NoisyDuelingDQN(n_actions)
+    elif has_adv_val:
+        q = DuelingDQN(n_actions)
+    elif has_noisy:
+        q = NoisyDQN(n_actions)
+    else:
+        q = DQN(n_actions)
+
+    q.load_state_dict(state_dict)
     return q
 
 

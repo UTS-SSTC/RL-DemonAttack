@@ -21,7 +21,7 @@ from gymnasium.wrappers import (
     RecordVideo
 )
 
-from dqn_demon_attack.agents import DQN
+from dqn_demon_attack.agents import DQN, DuelingDQN, NoisyDQN, NoisyDuelingDQN
 from dqn_demon_attack.envs import RewardConfig, DemonAttackReward
 
 
@@ -62,6 +62,9 @@ def load_model(ckpt_path, n_actions, device):
     """
     Load a trained DQN model from checkpoint.
 
+    Automatically detects the model architecture (DQN, DuelingDQN, NoisyDQN, or NoisyDuelingDQN)
+    based on the checkpoint's state dict keys.
+
     Args:
         ckpt_path: Path to the checkpoint file.
         n_actions: Number of actions in the environment.
@@ -71,8 +74,31 @@ def load_model(ckpt_path, n_actions, device):
         Loaded DQN model in evaluation mode.
     """
     ckpt = torch.load(ckpt_path, map_location=device)
-    q = DQN(n_actions).to(device)
-    q.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+
+    # Detect model architecture from state dict keys
+    has_adv = any("adv" in key for key in state_dict.keys())
+    has_val = any("val" in key for key in state_dict.keys())
+    has_noisy = any("sigma" in key for key in state_dict.keys())
+
+    # Select appropriate model class
+    if has_adv and has_val:
+        if has_noisy:
+            model_class = NoisyDuelingDQN
+            print(f"Detected NoisyDuelingDQN architecture")
+        else:
+            model_class = DuelingDQN
+            print(f"Detected DuelingDQN architecture")
+    else:
+        if has_noisy:
+            model_class = NoisyDQN
+            print(f"Detected NoisyDQN architecture")
+        else:
+            model_class = DQN
+            print(f"Detected DQN architecture")
+
+    q = model_class(n_actions).to(device)
+    q.load_state_dict(state_dict)
     q.eval()
     return q
 
