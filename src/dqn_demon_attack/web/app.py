@@ -10,7 +10,7 @@ import json
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 
-from dqn_demon_attack.web.training_manager import TrainingManager, TrainingConfig
+from dqn_demon_attack.web.training_manager import TrainingManager, WebTrainingConfig
 from dqn_demon_attack.web.evaluation_manager import EvaluationManager
 
 
@@ -47,7 +47,7 @@ def start_training():
         data = request.json
         if data is None:
             return jsonify({"success": False, "error": "No JSON data provided"}), 400
-        config = TrainingConfig(**data)
+        config = WebTrainingConfig(**data)
         result = training_manager.start_training(config)
         return jsonify({"success": True, **result})
     except Exception as e:

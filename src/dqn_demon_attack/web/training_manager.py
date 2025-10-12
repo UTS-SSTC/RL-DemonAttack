@@ -7,48 +7,32 @@ and metrics collection for visualization.
 
 import os
 import time
-import random
 import threading
 from typing import Optional, Dict, List, Any
 from collections import deque
+from dataclasses import dataclass, asdict
 
-import numpy as np
 import torch
-from gymnasium.spaces import Discrete
 from gymnasium.wrappers import RecordVideo
-from torch import nn
 
-from dqn_demon_attack.agents import DQN, Replay
 from dqn_demon_attack.envs import make_env, RewardConfig
-from dqn_demon_attack.utils import CSVLogger
+from dqn_demon_attack.utils import TrainingConfig, CSVLogger
+from dqn_demon_attack.utils.training_utils import train_dqn, to_tensor
 
 
-class TrainingConfig:
-    """Configuration for training session."""
+@dataclass
+class WebTrainingConfig(TrainingConfig):
+    """Extended training configuration for web interface."""
+
+    max_videos: int = 10
+    breakthrough_threshold: float = 0.15
 
     def __init__(self, **kwargs):
-        self.exp_name = kwargs.get("exp_name", "web_train")
-        self.total_steps = kwargs.get("total_steps", 10000)
-        self.eval_every = kwargs.get("eval_every", 2000)
-        self.seed = kwargs.get("seed", 0)
-        self.device = kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        valid_fields = {f.name for f in TrainingConfig.__dataclass_fields__.values()}
+        web_fields = {"max_videos", "breakthrough_threshold"}
 
-        self.terminal_on_life_loss = kwargs.get("terminal_on_life_loss", True)
-        self.screen_size = kwargs.get("screen_size", 84)
-        self.frame_stack = kwargs.get("frame_stack", 4)
-
-        self.reward_mode = kwargs.get("reward_mode", "clip")
-        self.gamma = kwargs.get("gamma", 0.99)
-        self.lr = kwargs.get("lr", 1e-4)
-        self.batch_size = kwargs.get("batch_size", 32)
-        self.replay_size = kwargs.get("replay_size", 50000)
-        self.warmup = kwargs.get("warmup", 1000)
-        self.target_update_freq = kwargs.get("target_update_freq", 1000)
-        self.grad_clip = kwargs.get("grad_clip", 10.0)
-
-        self.eps_start = kwargs.get("eps_start", 1.0)
-        self.eps_end = kwargs.get("eps_end", 0.1)
-        self.eps_decay_steps = kwargs.get("eps_decay_steps", 100000)
+        base_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+        super().__init__(**base_kwargs)
 
         self.max_videos = kwargs.get("max_videos", 10)
         self.breakthrough_threshold = kwargs.get("breakthrough_threshold", 0.15)
@@ -69,7 +53,7 @@ class TrainingManager:
         self.stop_flag = threading.Event()
         self.lock = threading.Lock()
 
-    def start_training(self, config: TrainingConfig) -> Dict[str, str]:
+    def start_training(self, config: WebTrainingConfig) -> Dict[str, str]:
         """
         Start a new training session in background thread.
 
@@ -195,30 +179,6 @@ class TrainingManager:
 
         return data
 
-    def _set_seed(self, seed: int):
-        """Set random seeds for reproducibility."""
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
-
-    def _to_tensor(self, obs):
-        """Convert observation to normalized PyTorch tensor."""
-        arr = np.asarray(obs)
-
-        if arr.ndim == 2:
-            arr = arr[None, ...]
-        elif arr.ndim == 3:
-            if arr.shape[0] in (1, 3, 4):
-                pass
-            elif arr.shape[1] in (1, 3, 4):
-                arr = np.moveaxis(arr, 1, 0)
-            elif arr.shape[2] in (1, 3, 4):
-                arr = np.moveaxis(arr, 2, 0)
-
-        arr = arr.astype(np.float32) / 255.0
-        return torch.from_numpy(arr[None, ...])
 
     def _should_record_video(self, current_return: float, best_return: float, threshold: float) -> bool:
         """Determine if current episode represents a breakthrough."""
@@ -268,7 +228,7 @@ class TrainingManager:
         done = False
 
         while not done:
-            s_t = self._to_tensor(s).to(device)
+            s_t = to_tensor(s).to(device)
             with torch.no_grad():
                 a = q(s_t).argmax(1).item()
             s, r, term, trunc, info = env.step(a)
@@ -282,7 +242,7 @@ class TrainingManager:
             return os.path.join(video_dir, video_files[-1])
         return ""
 
-    def _train_loop(self, cfg: TrainingConfig, run_dir: str):
+    def _train_loop(self, cfg: WebTrainingConfig, run_dir: str):
         """
         Main training loop executed in background thread.
 
@@ -291,10 +251,7 @@ class TrainingManager:
             run_dir: Directory for saving outputs.
         """
         try:
-            self._set_seed(cfg.seed)
-
-            ckpt_dir = os.path.join(run_dir, "checkpoints")
-            os.makedirs(ckpt_dir, exist_ok=True)
+            self._log_message(f"Training started: {cfg.total_steps} steps")
 
             log = CSVLogger(
                 os.path.join(run_dir, "train_log.csv"),
@@ -304,130 +261,55 @@ class TrainingManager:
                 ]
             )
 
-            reward_cfg = RewardConfig(mode=cfg.reward_mode)
-            env = make_env(
-                render_mode=None,
-                stack=cfg.frame_stack,
-                screen_size=cfg.screen_size,
-                terminal_on_life_loss=cfg.terminal_on_life_loss,
-                reward_cfg=reward_cfg
-            )
-
-            assert isinstance(env.action_space, Discrete)
-            n_actions = int(env.action_space.n)
-
-            q = DQN(n_actions).to(cfg.device)
-            tgt = DQN(n_actions).to(cfg.device)
-            tgt.load_state_dict(q.state_dict())
-            opt = torch.optim.Adam(q.parameters(), lr=cfg.lr)
-            replay = Replay(cfg.replay_size)
-
-            s, _ = env.reset(seed=cfg.seed)
-            s_t = self._to_tensor(s).to(cfg.device)
-            ep_return_raw, ep_return_shaped, ep_len, episode = 0.0, 0.0, 0, 0
-            loss_val, q_mean = float("nan"), float("nan")
-
             recent_returns = deque(maxlen=10)
+            current_q_network = None
 
-            self._log_message(f"Training started: {cfg.total_steps} steps")
+            def on_step_callback(step: int, metrics: Dict[str, Any]) -> bool:
+                with self.lock:
+                    if self.current_session:
+                        self.current_session["current_step"] = step
 
-            for step in range(1, cfg.total_steps + 1):
-                if self.stop_flag.is_set():
-                    self._log_message("Training stopped by user")
-                    break
+                return self.stop_flag.is_set()
 
-                eps = max(cfg.eps_end, cfg.eps_start - (cfg.eps_start - cfg.eps_end) * (step / cfg.eps_decay_steps))
+            def on_episode_callback(episode: int, step: int, ep_return_raw: float,
+                                   ep_return_shaped: float, ep_len: int):
+                nonlocal current_q_network
 
-                if random.random() < eps:
-                    a = env.action_space.sample()
-                else:
-                    with torch.no_grad():
-                        a = q(s_t).argmax(1).item()
+                with self.lock:
+                    if self.current_session:
+                        self.current_session["metrics"]["episodes"].append(episode)
+                        self.current_session["metrics"]["returns"].append(ep_return_raw)
+                        self.current_session["metrics"]["steps"].append(step)
 
-                s2, r, term, trunc, info = env.step(a)
-                done = term or trunc
-                raw_r = float(info.get("raw_reward", r))
-                ep_return_raw += raw_r
-                ep_return_shaped += r
-                ep_len += 1
+                recent_returns.append(ep_return_raw)
+                avg_recent = sum(recent_returns) / len(recent_returns) if recent_returns else 0.0
 
-                replay.push(s_t.cpu().numpy()[0], a, r, self._to_tensor(s2).cpu().numpy()[0], done)
-                s_t = self._to_tensor(s2).to(cfg.device)
+                with self.lock:
+                    if self.current_session and ep_return_raw > self.current_session["best_return"]:
+                        improvement = ep_return_raw - self.current_session["best_return"]
 
-                if len(replay) >= cfg.warmup:
-                    s_b, a_b, r_b, s2_b, d_b = replay.sample(cfg.batch_size)
-                    s_b = torch.tensor(s_b, dtype=torch.float32, device=cfg.device)
-                    a_b = torch.tensor(a_b, dtype=torch.int64, device=cfg.device)
-                    r_b = torch.tensor(r_b, dtype=torch.float32, device=cfg.device)
-                    s2_b = torch.tensor(s2_b, dtype=torch.float32, device=cfg.device)
-                    d_b = torch.tensor(d_b, dtype=torch.bool, device=cfg.device)
+                        if self._should_record_video(ep_return_raw, self.current_session["best_return"],
+                                                     cfg.breakthrough_threshold):
+                            self._log_message(f"Breakthrough detected at step {step}: reward {ep_return_raw:.1f} (improvement: {improvement:.1f})")
 
-                    with torch.no_grad():
-                        target = tgt(s2_b).max(1).values
-                        y = r_b + cfg.gamma * (~d_b).float() * target
+                            if len(self.current_session["videos"]) >= cfg.max_videos:
+                                oldest_video = self.current_session["videos"].pop(0)
+                                if os.path.exists(oldest_video["path"]):
+                                    os.remove(oldest_video["path"])
 
-                    qvals = q(s_b).gather(1, a_b[:, None]).squeeze(1)
-                    loss = nn.functional.smooth_l1_loss(qvals, y)
+                            reward_cfg = RewardConfig(mode=cfg.reward_mode)
+                            env_maker = lambda: make_env(
+                                render_mode="rgb_array",
+                                stack=cfg.frame_stack,
+                                screen_size=cfg.screen_size,
+                                terminal_on_life_loss=cfg.terminal_on_life_loss,
+                                reward_cfg=reward_cfg
+                            )
 
-                    opt.zero_grad(set_to_none=True)
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(q.parameters(), cfg.grad_clip)
-                    opt.step()
-                    loss_val = float(loss.item())
-                    q_mean = float(qvals.mean().item())
-
-                    if step % cfg.target_update_freq == 0:
-                        tgt.load_state_dict(q.state_dict())
-
-                if done:
-                    episode += 1
-                    log.log(
-                        step=step,
-                        episode=episode,
-                        ep_return_raw=ep_return_raw,
-                        ep_return_shaped=ep_return_shaped,
-                        ep_len=ep_len,
-                        loss=loss_val,
-                        q_mean=q_mean,
-                        epsilon=eps,
-                        replay_size=len(replay)
-                    )
-
-                    with self.lock:
-                        if self.current_session:
-                            self.current_session["current_step"] = step
-                            self.current_session["metrics"]["episodes"].append(episode)
-                            self.current_session["metrics"]["returns"].append(ep_return_raw)
-                            self.current_session["metrics"]["steps"].append(step)
-                            if loss_val == loss_val:
-                                self.current_session["metrics"]["losses"].append(loss_val)
-                            if q_mean == q_mean:
-                                self.current_session["metrics"]["q_values"].append(q_mean)
-
-                    recent_returns.append(ep_return_raw)
-                    avg_recent = np.mean(recent_returns) if recent_returns else 0.0
-
-                    with self.lock:
-                        if self.current_session and ep_return_raw > self.current_session["best_return"]:
-                            improvement = ep_return_raw - self.current_session["best_return"]
-
-                            if self._should_record_video(ep_return_raw, self.current_session["best_return"], cfg.breakthrough_threshold):
-                                self._log_message(f"Breakthrough detected at step {step}: reward {ep_return_raw:.1f} (improvement: {improvement:.1f})")
-
-                                if len(self.current_session["videos"]) >= cfg.max_videos:
-                                    oldest_video = self.current_session["videos"].pop(0)
-                                    if os.path.exists(oldest_video["path"]):
-                                        os.remove(oldest_video["path"])
-
-                                env_maker = lambda: make_env(
-                                    render_mode="rgb_array",
-                                    stack=cfg.frame_stack,
-                                    screen_size=cfg.screen_size,
-                                    terminal_on_life_loss=cfg.terminal_on_life_loss,
-                                    reward_cfg=reward_cfg
+                            if current_q_network is not None:
+                                video_path = self._record_breakthrough_video(
+                                    current_q_network, env_maker, cfg.device, run_dir, step, ep_return_raw
                                 )
-
-                                video_path = self._record_breakthrough_video(q, env_maker, cfg.device, run_dir, step, ep_return_raw)
 
                                 if video_path:
                                     self.current_session["videos"].append({
@@ -437,55 +319,29 @@ class TrainingManager:
                                         "timestamp": time.time()
                                     })
 
-                            self.current_session["best_return"] = ep_return_raw
+                        self.current_session["best_return"] = ep_return_raw
 
-                    self._log_message(f"Episode {episode} | Step {step} | Return: {ep_return_raw:.1f} | Avg: {avg_recent:.1f}")
+                self._log_message(f"Episode {episode} | Step {step} | Return: {ep_return_raw:.1f} | Avg: {avg_recent:.1f}")
 
-                    ep_return_raw, ep_return_shaped, ep_len = 0.0, 0.0, 0
-                    s, _ = env.reset()
-                    s_t = self._to_tensor(s).to(cfg.device)
-
-                if step % cfg.eval_every == 0:
-                    ckpt_path = os.path.join(ckpt_dir, f"step_{step}.pt")
-                    torch.save(
-                        {
+            def on_checkpoint_callback(step: int, ckpt_path: str):
+                with self.lock:
+                    if self.current_session:
+                        self.current_session["checkpoints"].append({
                             "step": step,
-                            "model": q.state_dict(),
-                            "optimizer": opt.state_dict(),
-                            "cfg": vars(cfg),
-                        },
-                        ckpt_path
-                    )
+                            "path": ckpt_path
+                        })
+                self._log_message(f"Checkpoint saved at step {step}")
 
-                    with self.lock:
-                        if self.current_session:
-                            self.current_session["checkpoints"].append({
-                                "step": step,
-                                "path": ckpt_path
-                            })
-
-                    self._log_message(f"Checkpoint saved at step {step}")
-
-            final_path = os.path.join(ckpt_dir, "final.pt")
-            torch.save(
-                {
-                    "step": cfg.total_steps,
-                    "model": q.state_dict(),
-                    "optimizer": opt.state_dict(),
-                    "cfg": vars(cfg),
-                },
-                final_path
+            result = train_dqn(
+                cfg=cfg,
+                log=log,
+                run_dir=run_dir,
+                on_step_callback=on_step_callback,
+                on_episode_callback=on_episode_callback,
+                on_checkpoint_callback=on_checkpoint_callback
             )
 
-            with self.lock:
-                if self.current_session:
-                    self.current_session["checkpoints"].append({
-                        "step": cfg.total_steps,
-                        "path": final_path
-                    })
-
-            log.close()
-            env.close()
+            current_q_network = result["final_model"]
 
             with self.lock:
                 if self.current_session:

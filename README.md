@@ -131,13 +131,13 @@ pip install -e .
 
 ```bash
 # Baseline DQN (500k steps, ~2-4 hours)
-uv run python -m dqn_demon_attack.scripts.train_yaml --config configs/baseline_dqn.yaml
+uv run train --config configs/baseline_dqn.yaml
 
 # Dueling DQN (2M steps, ~8-12 hours, recommended)
-uv run python -m dqn_demon_attack.scripts.train_yaml --config configs/dueling_dqn.yaml
+uv run train --config configs/dueling_dqn.yaml
 
 # Noisy Dueling DQN (3M steps, ~15-20 hours, best performance)
-uv run python -m dqn_demon_attack.scripts.train_yaml --config configs/noisy_dueling_dqn.yaml
+uv run train --config configs/noisy_dueling_dqn.yaml
 ```
 
 ### Evaluation
@@ -301,7 +301,7 @@ RL-DemonAttack/
 │   │   ├── logger.py            # Training logging
 │   │   └── viz.py               # Visualization tools
 │   ├── scripts/
-│   │   ├── train_yaml.py        # Training script
+│   │   ├── train.py             # Training script
 │   │   ├── eval.py              # Evaluation script
 │   │   └── watch.py             # Visualization script
 │   └── web/

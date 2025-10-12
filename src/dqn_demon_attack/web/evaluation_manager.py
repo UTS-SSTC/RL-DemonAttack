@@ -12,11 +12,10 @@ from typing import Optional, Dict, List, Any
 
 import numpy as np
 import torch
-from gymnasium.spaces import Discrete
 from gymnasium.wrappers import RecordVideo, RecordEpisodeStatistics
 
-from dqn_demon_attack.agents import DQN, DuelingDQN, NoisyDQN, NoisyDuelingDQN
 from dqn_demon_attack.envs import make_env
+from dqn_demon_attack.utils.training_utils import load_model, to_tensor
 
 
 class EvaluationManager:
@@ -148,71 +147,6 @@ class EvaluationManager:
 
             return eval_data
 
-    def _load_model(self, ckpt_path: str, device: str):
-        """
-        Load trained model from checkpoint.
-
-        Automatically detects model architecture from state dict.
-
-        Args:
-            ckpt_path: Path to checkpoint file.
-            device: Device to load model on.
-
-        Returns:
-            Tuple of (model, n_actions).
-        """
-        ckpt = torch.load(ckpt_path, map_location=device)
-        state_dict = ckpt["model"]
-
-        has_adv = any("adv" in key for key in state_dict.keys())
-        has_val = any("val" in key for key in state_dict.keys())
-        has_noisy = any("sigma" in key for key in state_dict.keys())
-
-        if has_adv and has_val:
-            if has_noisy:
-                model_class = NoisyDuelingDQN
-            else:
-                model_class = DuelingDQN
-        else:
-            if has_noisy:
-                model_class = NoisyDQN
-            else:
-                model_class = DQN
-
-        n_actions = None
-        for key in sorted(state_dict.keys(), reverse=True):
-            if "adv" in key and "3" in key and "bias" in key:
-                n_actions = state_dict[key].shape[0]
-                break
-            elif "head" in key and "3" in key and "bias" in key:
-                n_actions = state_dict[key].shape[0]
-                break
-
-        if n_actions is None:
-            raise ValueError("Could not determine number of actions from checkpoint")
-
-        q = model_class(n_actions).to(device)
-        q.load_state_dict(state_dict)
-        q.eval()
-
-        return q, n_actions
-
-    def _to_tensor(self, obs):
-        """Convert observation to normalized PyTorch tensor."""
-        arr = np.asarray(obs)
-
-        if arr.ndim == 2:
-            arr = arr[None, ...]
-        elif arr.ndim == 3:
-            if arr.shape[0] in (1, 3, 4):
-                pass
-            elif arr.shape[1] in (1, 3, 4):
-                arr = np.moveaxis(arr, 1, 0)
-            elif arr.shape[2] in (1, 3, 4):
-                arr = np.moveaxis(arr, 2, 0)
-
-        arr = arr.astype(np.float32) / 255.0
-        return torch.from_numpy(arr[None, ...])
 
     def _eval_loop(self, checkpoint_path: str, num_episodes: int,
                    record_video: bool, device: str, video_dir: str):
@@ -227,7 +161,7 @@ class EvaluationManager:
             video_dir: Directory to save videos.
         """
         try:
-            q, n_actions = self._load_model(checkpoint_path, device)
+            q, _ = load_model(checkpoint_path, device)
 
             for episode in range(num_episodes):
                 if record_video:
@@ -250,7 +184,7 @@ class EvaluationManager:
                 q_vals_episode = []
 
                 while not done:
-                    s_t = self._to_tensor(s).to(device)
+                    s_t = to_tensor(s).to(device)
                     with torch.no_grad():
                         q_vals = q(s_t)
                         a = q_vals.argmax(1).item()

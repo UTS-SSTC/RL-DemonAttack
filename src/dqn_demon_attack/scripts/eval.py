@@ -11,74 +11,8 @@ import numpy as np
 import torch
 from gymnasium.spaces import Discrete
 
-from dqn_demon_attack.agents import DQN, DuelingDQN, NoisyDQN, NoisyDuelingDQN
 from dqn_demon_attack.envs import make_env
-
-
-def to_tensor(obs):
-    """
-    Convert observation to normalized PyTorch tensor.
-
-    Handles various observation shapes and converts to [1, C, H, W] format
-    with values normalized to [0, 1].
-
-    Args:
-        obs: Numpy array observation from environment.
-
-    Returns:
-        PyTorch tensor of shape [1, C, H, W] with float32 values in [0, 1].
-    """
-    arr = np.asarray(obs)
-
-    if arr.ndim == 2:
-        arr = arr[None, ...]
-    elif arr.ndim == 3:
-        if arr.shape[0] in (1, 3, 4):
-            pass
-        elif arr.shape[1] in (1, 3, 4):
-            arr = np.moveaxis(arr, 1, 0)
-        elif arr.shape[2] in (1, 3, 4):
-            arr = np.moveaxis(arr, 2, 0)
-        else:
-            raise RuntimeError(f"Unrecognized obs shape {arr.shape}, cannot locate channel axis.")
-    else:
-        raise RuntimeError(f"Unrecognized obs ndim {arr.ndim}")
-
-    arr = arr.astype(np.float32) / 255.0
-    return torch.from_numpy(arr[None, ...])
-
-
-def load_model(ckpt_path, n_actions):
-    """
-    Load a trained DQN model from checkpoint.
-
-    Automatically detects model architecture based on checkpoint keys.
-
-    Args:
-        ckpt_path: Path to the checkpoint file.
-        n_actions: Number of actions in the environment.
-
-    Returns:
-        Loaded DQN model.
-    """
-    ckpt = torch.load(ckpt_path, map_location="cpu")
-    state_dict = ckpt["model"]
-
-    # Detect model architecture from state dict keys
-    has_adv_val = any(k.startswith("adv.") or k.startswith("val.") for k in state_dict.keys())
-    has_noisy = any("_sigma" in k or "_epsilon" in k for k in state_dict.keys())
-
-    if has_adv_val and has_noisy:
-        q = NoisyDuelingDQN(n_actions)
-    elif has_adv_val:
-        q = DuelingDQN(n_actions)
-    elif has_noisy:
-        q = NoisyDQN(n_actions)
-    else:
-        q = DQN(n_actions)
-
-    q.load_state_dict(state_dict)
-    return q
+from dqn_demon_attack.utils.training_utils import load_model, to_tensor
 
 
 def evaluate(ckpt_path, episodes=10, device="cuda"):
@@ -92,9 +26,8 @@ def evaluate(ckpt_path, episodes=10, device="cuda"):
     """
     env = make_env()
     assert isinstance(env.action_space, Discrete)
-    n_actions = int(env.action_space.n)
 
-    q = load_model(ckpt_path, n_actions).to(device)
+    q, _ = load_model(ckpt_path, device)
     q.eval()
 
     rets, lens, q_means, q_stds = [], [], [], []

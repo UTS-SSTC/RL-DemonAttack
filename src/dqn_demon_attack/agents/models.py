@@ -12,6 +12,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _create_feature_extractor():
+    """
+    Create shared convolutional feature extractor for DQN architectures.
+
+    Returns:
+        Sequential module with three convolutional layers and ReLU activations.
+    """
+    return nn.Sequential(
+        nn.Conv2d(4, 32, kernel_size=8, stride=4),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(32, 64, kernel_size=4, stride=2),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        nn.ReLU(inplace=True),
+    )
+
+
 class DQN(nn.Module):
     """
     Nature DQN convolutional network.
@@ -25,14 +42,7 @@ class DQN(nn.Module):
 
     def __init__(self, n_actions: int):
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(4, 32, kernel_size=8, stride=4),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(inplace=True),
-        )
+        self.features = _create_feature_extractor()
         self.head = nn.Sequential(
             nn.Flatten(),
             nn.Linear(64 * 7 * 7, 512),
@@ -68,14 +78,7 @@ class DuelingDQN(nn.Module):
 
     def __init__(self, n_actions: int):
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(4, 32, kernel_size=8, stride=4),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(inplace=True),
-        )
+        self.features = _create_feature_extractor()
         self.adv = nn.Sequential(
             nn.Flatten(),
             nn.Linear(64 * 7 * 7, 512),
@@ -194,14 +197,7 @@ class NoisyDQN(nn.Module):
 
     def __init__(self, n_actions: int):
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(4, 32, kernel_size=8, stride=4),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(inplace=True),
-        )
+        self.features = _create_feature_extractor()
         self.head = nn.Sequential(
             nn.Flatten(),
             NoisyLinear(64 * 7 * 7, 512),
@@ -242,14 +238,7 @@ class NoisyDuelingDQN(nn.Module):
 
     def __init__(self, n_actions: int):
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(4, 32, kernel_size=8, stride=4),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(inplace=True),
-        )
+        self.features = _create_feature_extractor()
         self.adv = nn.Sequential(
             nn.Flatten(),
             NoisyLinear(64 * 7 * 7, 512),
