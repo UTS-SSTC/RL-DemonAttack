@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DQN DemonAttack Training & Evaluation</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+
+        .section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 25px;
+            border: 2px solid #e0e0e0;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status-box {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .status-box h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .log-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            margin-top: 15px;
+        }
+
+        .log-entry {
+            padding: 3px 0;
+            border-bottom: 1px solid #333;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .metric-card {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+            border: 2px solid #e0e0e0;
+        }
+
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .metric-label {
+            color: #888;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-top: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+        }
+
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .video-card {
+            background: white;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 2px solid #e0e0e0;
+        }
+
+        .video-card video {
+            width: 100%;
+            height: auto;
+        }
+
+        .video-info {
+            padding: 10px;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>DQN DemonAttack Training & Evaluation System</h1>
+            <p>Train and evaluate reinforcement learning agents with real-time monitoring</p>
+        </header>
+
+        <div class="main-content">
+            <div class="section">
+                <h2>Model Training</h2>
+
+                <div class="form-group">
+                    <label for="exp_name">Experiment Name:</label>
+                    <input type="text" id="exp_name" value="web_exp" placeholder="Enter experiment name">
+                </div>
+
+                <div class="form-group">
+                    <label for="total_steps">Total Steps:</label>
+                    <input type="number" id="total_steps" value="5000" min="100" step="100">
+                </div>
+
+                <div class="form-group">
+                    <label for="eval_every">Evaluation Interval:</label>
+                    <input type="number" id="eval_every" value="1000" min="100" step="100">
+                </div>
+
+                <button class="btn btn-primary" id="start_train_btn" onclick="startTraining()">Start Training</button>
+                <button class="btn btn-danger" id="stop_train_btn" onclick="stopTraining()" disabled>Stop Training</button>
+
+                <div id="training_status" class="status-box hidden">
+                    <h3>Training Status</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="train_progress" style="width: 0%;">0%</div>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-value" id="current_step">0</div>
+                            <div class="metric-label">Current Step</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="num_episodes">0</div>
+                            <div class="metric-label">Episodes</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="best_return">0.0</div>
+                            <div class="metric-label">Best Return</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="log-output" id="training_logs">
+                    <div class="log-entry">Waiting to start training...</div>
+                </div>
+
+                <div id="breakthrough_videos" class="hidden">
+                    <h3 style="margin-top: 20px; color: #667eea;">Breakthrough Videos</h3>
+                    <div class="video-grid" id="train_video_grid"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Model Evaluation</h2>
+
+                <div class="form-group">
+                    <label for="session_select">Training Session:</label>
+                    <select id="session_select" onchange="loadCheckpoints()">
+                        <option value="">Select a session...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="checkpoint_select">Checkpoint:</label>
+                    <select id="checkpoint_select">
+                        <option value="">Select a checkpoint...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="num_episodes">Number of Episodes:</label>
+                    <input type="number" id="num_episodes" value="5" min="1" max="20">
+                </div>
+
+                <button class="btn btn-primary" id="start_eval_btn" onclick="startEvaluation()">Start Evaluation</button>
+                <button class="btn btn-secondary" onclick="loadSessions()">Refresh Sessions</button>
+
+                <div id="evaluation_status" class="status-box hidden">
+                    <h3>Evaluation Status</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="eval_progress" style="width: 0%;">0%</div>
+                    </div>
+                </div>
+
+                <div id="eval_results" class="hidden">
+                    <h3 style="margin-top: 20px; color: #667eea;">Performance Metrics</h3>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-value" id="mean_return">0.0</div>
+                            <div class="metric-label">Mean Return</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="std_return">0.0</div>
+                            <div class="metric-label">Std Return</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="max_return">0.0</div>
+                            <div class="metric-label">Max Return</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="mean_length">0</div>
+                            <div class="metric-label">Mean Length</div>
+                        </div>
+                    </div>
+
+                    <h3 style="margin-top: 20px; color: #667eea;">Evaluation Videos</h3>
+                    <div class="video-grid" id="eval_video_grid"></div>
+                </div>
+            </div>
+
+            <div class="section full-width">
+                <h2>Training Curves</h2>
+                <button class="btn btn-secondary" onclick="showTrainingCurves()">Load Training Curves</button>
+                <div class="chart-container">
+                    <canvas id="training_chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let trainingInterval = null;
+        let evaluationInterval = null;
+        let currentSessionId = null;
+        let trainingChart = null;
+
+        async function startTraining() {
+            const expName = document.getElementById('exp_name').value;
+            const totalSteps = parseInt(document.getElementById('total_steps').value);
+            const evalEvery = parseInt(document.getElementById('eval_every').value);
+
+            const config = {
+                exp_name: expName,
+                total_steps: totalSteps,
+                eval_every: evalEvery
+            };
+
+            try {
+                const response = await fetch('/api/training/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentSessionId = data.session_id;
+                    document.getElementById('start_train_btn').disabled = true;
+                    document.getElementById('stop_train_btn').disabled = false;
+                    document.getElementById('training_status').classList.remove('hidden');
+
+                    trainingInterval = setInterval(updateTrainingStatus, 1000);
+                } else {
+                    alert('Failed to start training: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function stopTraining() {
+            try {
+                const response = await fetch('/api/training/stop', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('stop_train_btn').disabled = true;
+                }
+            } catch (error) {
+                console.error('Error stopping training:', error);
+            }
+        }
+
+        async function updateTrainingStatus() {
+            try {
+                const response = await fetch('/api/training/status');
+                const data = await response.json();
+
+                if (!data.is_training) {
+                    if (trainingInterval) {
+                        clearInterval(trainingInterval);
+                        trainingInterval = null;
+                    }
+                    document.getElementById('start_train_btn').disabled = false;
+                    document.getElementById('stop_train_btn').disabled = true;
+                    return;
+                }
+
+                const progress = (data.progress || 0) * 100;
+                document.getElementById('train_progress').style.width = progress + '%';
+                document.getElementById('train_progress').textContent = progress.toFixed(1) + '%';
+
+                document.getElementById('current_step').textContent = data.current_step || 0;
+                document.getElementById('num_episodes').textContent = data.metrics?.episodes?.length || 0;
+                document.getElementById('best_return').textContent = (data.best_return || 0).toFixed(1);
+
+                const logsDiv = document.getElementById('training_logs');
+                logsDiv.innerHTML = '';
+                if (data.logs && data.logs.length > 0) {
+                    data.logs.slice(-20).forEach(log => {
+                        const logEntry = document.createElement('div');
+                        logEntry.className = 'log-entry';
+                        logEntry.textContent = log.message;
+                        logsDiv.appendChild(logEntry);
+                    });
+                    logsDiv.scrollTop = logsDiv.scrollHeight;
+                }
+
+                if (data.videos && data.videos.length > 0) {
+                    document.getElementById('breakthrough_videos').classList.remove('hidden');
+                    const videoGrid = document.getElementById('train_video_grid');
+                    videoGrid.innerHTML = '';
+
+                    data.videos.forEach(video => {
+                        const videoCard = document.createElement('div');
+                        videoCard.className = 'video-card';
+                        videoCard.innerHTML = `
+                            <video controls>
+                                <source src="/api/video/${encodeURIComponent(video.path)}" type="video/mp4">
+                            </video>
+                            <div class="video-info">
+                                <strong>Step ${video.step}</strong><br>
+                                Reward: ${video.reward.toFixed(1)}
+                            </div>
+                        `;
+                        videoGrid.appendChild(videoCard);
+                    });
+                }
+            } catch (error) {
+                console.error('Error updating training status:', error);
+            }
+        }
+
+        async function loadSessions() {
+            try {
+                const response = await fetch('/api/sessions');
+                const data = await response.json();
+
+                const select = document.getElementById('session_select');
+                select.innerHTML = '<option value="">Select a session...</option>';
+
+                if (data.success && data.sessions) {
+                    data.sessions.forEach(session => {
+                        const option = document.createElement('option');
+                        option.value = session.session_id;
+                        option.textContent = session.session_id;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading sessions:', error);
+            }
+        }
+
+        async function loadCheckpoints() {
+            const sessionId = document.getElementById('session_select').value;
+            if (!sessionId) return;
+
+            try {
+                const response = await fetch(`/api/evaluation/checkpoints/${sessionId}`);
+                const data = await response.json();
+
+                const select = document.getElementById('checkpoint_select');
+                select.innerHTML = '<option value="">Select a checkpoint...</option>';
+
+                if (data.success && data.checkpoints) {
+                    data.checkpoints.forEach(ckpt => {
+                        const option = document.createElement('option');
+                        option.value = ckpt.path;
+                        option.textContent = ckpt.name;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading checkpoints:', error);
+            }
+        }
+
+        async function startEvaluation() {
+            const checkpointPath = document.getElementById('checkpoint_select').value;
+            const numEpisodes = parseInt(document.getElementById('num_episodes').value);
+
+            if (!checkpointPath) {
+                alert('Please select a checkpoint');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/evaluation/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        checkpoint_path: checkpointPath,
+                        num_episodes: numEpisodes,
+                        record_video: true,
+                        device: 'cuda'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('start_eval_btn').disabled = true;
+                    document.getElementById('evaluation_status').classList.remove('hidden');
+
+                    evaluationInterval = setInterval(updateEvaluationStatus, 1000);
+                } else {
+                    alert('Failed to start evaluation: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function updateEvaluationStatus() {
+            try {
+                const response = await fetch('/api/evaluation/status');
+                const data = await response.json();
+
+                if (!data.is_evaluating) {
+                    if (evaluationInterval) {
+                        clearInterval(evaluationInterval);
+                        evaluationInterval = null;
+                    }
+                    document.getElementById('start_eval_btn').disabled = false;
+
+                    if (data.summary) {
+                        showEvaluationResults(data);
+                    }
+                    return;
+                }
+
+                const progress = (data.progress || 0) * 100;
+                document.getElementById('eval_progress').style.width = progress + '%';
+                document.getElementById('eval_progress').textContent = progress.toFixed(1) + '%';
+
+            } catch (error) {
+                console.error('Error updating evaluation status:', error);
+            }
+        }
+
+        function showEvaluationResults(data) {
+            document.getElementById('eval_results').classList.remove('hidden');
+
+            const summary = data.summary;
+            document.getElementById('mean_return').textContent = summary.mean_return.toFixed(1);
+            document.getElementById('std_return').textContent = summary.std_return.toFixed(1);
+            document.getElementById('max_return').textContent = summary.max_return.toFixed(1);
+            document.getElementById('mean_length').textContent = summary.mean_length.toFixed(0);
+
+            const videoGrid = document.getElementById('eval_video_grid');
+            videoGrid.innerHTML = '';
+
+            if (data.videos && data.videos.length > 0) {
+                data.videos.forEach(video => {
+                    const videoCard = document.createElement('div');
+                    videoCard.className = 'video-card';
+                    videoCard.innerHTML = `
+                        <video controls>
+                            <source src="/api/video/${encodeURIComponent(video.path)}" type="video/mp4">
+                        </video>
+                        <div class="video-info">
+                            <strong>Episode ${video.episode + 1}</strong><br>
+                            Return: ${video.return.toFixed(1)}<br>
+                            Length: ${video.length}
+                        </div>
+                    `;
+                    videoGrid.appendChild(videoCard);
+                });
+            }
+        }
+
+        async function showTrainingCurves() {
+            const sessionId = document.getElementById('session_select').value || currentSessionId;
+
+            if (!sessionId) {
+                alert('Please select a training session or start training first');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/training/curves/${sessionId}`);
+                const data = await response.json();
+
+                if (data.success && data.data) {
+                    plotTrainingCurves(data.data);
+                } else {
+                    alert('Failed to load training curves: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function plotTrainingCurves(data) {
+            const ctx = document.getElementById('training_chart').getContext('2d');
+
+            if (trainingChart) {
+                trainingChart.destroy();
+            }
+
+            trainingChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.episodes,
+                    datasets: [{
+                        label: 'Episode Return',
+                        data: data.returns_raw,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        tension: 0.1
+                    }, {
+                        label: 'Loss',
+                        data: data.losses,
+                        borderColor: '#dc3545',
+                        backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                        tension: 0.1,
+                        yAxisID: 'y1'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Return'
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Loss'
+                            },
+                            grid: {
+                                drawOnChartArea: false
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Training Progress'
+                        }
+                    }
+                }
+            });
+        }
+
+        loadSessions();
+    </script>
+</body>
+</html>

@@ -157,6 +157,26 @@ python -m dqn_demon_attack.scripts.watch --ckpt runs/dueling_dqn/checkpoints/fin
 python -m dqn_demon_attack.utils.viz --log runs/dueling_dqn/train_log.csv
 ```
 
+### Web GUI (Recommended)
+
+Launch the interactive web interface for training and evaluation:
+
+```bash
+# Start web server
+uv run web
+
+# Open browser to http://localhost:5000
+```
+
+**Features:**
+- Real-time training monitoring with live progress tracking
+- Automatic breakthrough video recording (max 10 videos)
+- Interactive training curve visualization
+- Model evaluation with performance metrics
+- Video playback directly in browser
+
+See [Web GUI Usage](#web-gui) section below for detailed instructions.
+
 ---
 
 ## ⚙️ Configuration
@@ -280,10 +300,16 @@ RL-DemonAttack/
 │   │   ├── config.py            # Configuration management
 │   │   ├── logger.py            # Training logging
 │   │   └── viz.py               # Visualization tools
-│   └── scripts/
-│       ├── train_yaml.py        # Training script
-│       ├── eval.py              # Evaluation script
-│       └── watch.py             # Visualization script
+│   ├── scripts/
+│   │   ├── train_yaml.py        # Training script
+│   │   ├── eval.py              # Evaluation script
+│   │   └── watch.py             # Visualization script
+│   └── web/
+│       ├── app.py               # Flask application
+│       ├── training_manager.py  # Training session management
+│       ├── evaluation_manager.py # Evaluation management
+│       └── templates/
+│           └── index.html       # Web interface
 │
 ├── runs/                         # Training outputs
 │   └── <exp_name>/
@@ -340,6 +366,124 @@ L(θ) = 𝔼[(r + γ·Q̂(s', argmax Q(s',a')) - Q(s,a))²]
 L(θ) = 𝔼[w_i · (r + γ·Q̂(s',a') - Q(s,a))²]
 where w_i = (N · P(i))⁻ᵝ  (importance weight)
 ```
+
+---
+
+## 🌐 Web GUI
+
+A Flask-based web interface for interactive training and evaluation with real-time monitoring and video recording.
+
+### Features
+
+#### Training Module
+- **Real-time Monitoring**: Live progress tracking with step count, episode count, and best reward
+- **Training Logs**: Real-time log output window showing detailed training progress
+- **Breakthrough Video Recording**: Automatically captures videos when performance improves significantly
+  - Maximum of 10 videos kept (configurable)
+  - Breakthrough threshold: 15% improvement over previous best (configurable)
+  - Automatic cleanup of oldest videos
+- **Training Curves**: Interactive Chart.js visualization of episode returns, losses, and Q-values
+- **Checkpoint Management**: Automatic saving at specified intervals
+
+#### Evaluation Module
+- **Model Selection**: Choose from trained checkpoints to evaluate
+- **Video Recording**: Records gameplay videos for each evaluation episode
+- **Performance Metrics**: Comprehensive statistics including:
+  - Mean return with standard deviation
+  - Min/Max returns across episodes
+  - Mean episode length
+  - Q-value statistics
+- **Video Playback**: View recorded episodes directly in browser
+
+### Quick Start
+
+```bash
+# Start web server
+uv run web
+
+# Open browser to http://localhost:5000
+```
+
+### Usage
+
+#### Training a Model
+
+1. **Configure Parameters**:
+   - Experiment Name: `web_exp`
+   - Total Steps: `5000` (quick test) or `500000` (full training)
+   - Evaluation Interval: `1000`
+
+2. **Start Training**:
+   - Click "Start Training" button
+   - Monitor real-time progress, logs, and breakthrough videos
+   - Click "Stop Training" to gracefully stop (optional)
+
+3. **View Training Curves**:
+   - Select session from dropdown
+   - Click "Load Training Curves"
+   - Analyze interactive charts
+
+#### Evaluating a Model
+
+1. **Select Model**:
+   - Click "Refresh Sessions" to load available sessions
+   - Choose training session from dropdown
+   - Select checkpoint (e.g., `final.pt`)
+
+2. **Run Evaluation**:
+   - Set number of episodes (default: 5)
+   - Click "Start Evaluation"
+   - View performance metrics and recorded videos
+
+### Architecture
+
+**Backend Components:**
+- `TrainingManager`: Background training execution with breakthrough detection
+- `EvaluationManager`: Model loading and evaluation with metrics collection
+- `Flask API`: REST endpoints for training, evaluation, and video serving
+
+**Frontend:**
+- Single-page application with responsive grid layout
+- Real-time updates via JavaScript polling (1-second interval)
+- Chart.js for interactive visualization
+- Embedded video playback
+
+### API Endpoints
+
+**Training:**
+- `POST /api/training/start` - Start training session
+- `POST /api/training/stop` - Stop current training
+- `GET /api/training/status` - Get real-time status
+- `GET /api/training/curves/<id>` - Load training curves
+
+**Evaluation:**
+- `GET /api/evaluation/checkpoints/<id>` - List checkpoints
+- `POST /api/evaluation/start` - Start evaluation
+- `GET /api/evaluation/status` - Get evaluation results
+
+**Utilities:**
+- `GET /api/sessions` - List all training sessions
+- `GET /api/video/<path>` - Serve video files
+
+### Video Management
+
+**Breakthrough Detection:**
+- Videos recorded when episode return exceeds previous best by ≥15%
+- Maintains circular buffer of max 10 videos
+- Automatic cleanup of oldest videos
+
+**Storage:**
+- Training videos: `runs/<session_id>/videos/`
+- Evaluation videos: `runs/<session_id>/eval_videos/<eval_id>/`
+- Format: MP4 (H.264 codec)
+
+### Performance
+
+- Training: Background thread execution (non-blocking)
+- Evaluation: Background thread execution (non-blocking)
+- Video recording overhead: ~10-15% per episode
+- Polling interval: 1 second
+- GPU acceleration: Set `device="cuda"`
 
 ---
 
