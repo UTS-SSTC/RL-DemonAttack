@@ -11,7 +11,7 @@ from dqn_demon_attack.utils import CSVLogger, TrainingConfig, load_config, save_
 from dqn_demon_attack.utils.training_utils import train_dqn
 
 
-def main(cfg: TrainingConfig):
+def train_with_config(cfg: TrainingConfig):
     """Main training function."""
     errors = validate_config(cfg)
     if errors:
@@ -65,7 +65,8 @@ def main(cfg: TrainingConfig):
     print(f"\nTraining complete! Checkpoints saved to {ckpt_dir}")
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the CLI command."""
     parser = argparse.ArgumentParser(description="Train DQN with YAML configuration")
     parser.add_argument(
         "--config",
@@ -76,4 +77,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = load_config(args.config)
-    main(config)
+    train_with_config(config)
+
+
+if __name__ == "__main__":
+    main()
