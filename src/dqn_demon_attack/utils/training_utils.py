@@ -34,22 +34,8 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = True
 
 
-def to_tensor(obs) -> torch.Tensor:
-    """
-    Convert observation to normalized PyTorch tensor.
-
-    Handles various observation shapes and converts to [1, C, H, W] format
-    with values normalized to [0, 1].
-
-    Args:
-        obs: Numpy array observation from environment.
-
-    Returns:
-        PyTorch tensor of shape [1, C, H, W] with float32 values in [0, 1].
-
-    Raises:
-        RuntimeError: If observation shape is not recognized.
-    """
+def obs_to_numpy(obs) -> np.ndarray:
+    """Convert an observation to a CHW uint8 numpy array."""
     arr = np.asarray(obs)
 
     if arr.ndim == 2:
@@ -66,7 +52,26 @@ def to_tensor(obs) -> torch.Tensor:
     else:
         raise RuntimeError(f"Unrecognized obs ndim {arr.ndim}")
 
-    arr = arr.astype(np.float32) / 255.0
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8)
+
+    return arr
+
+
+def to_tensor(obs) -> torch.Tensor:
+    """
+    Convert observation to normalized PyTorch tensor.
+
+    Handles various observation shapes and converts to [1, C, H, W] format
+    with values normalized to [0, 1].
+
+    Args:
+        obs: Observation from environment as array-like or np.ndarray.
+
+    Returns:
+        PyTorch tensor of shape [1, C, H, W] with float32 values in [0, 1].
+    """
+    arr = obs_to_numpy(obs).astype(np.float32) / 255.0
     return torch.from_numpy(arr[None, ...])
 
 
@@ -116,6 +121,31 @@ def load_model(ckpt_path: str, device: str = "cpu") -> Tuple[nn.Module, int]:
     ckpt = torch.load(ckpt_path, map_location=device)
     state_dict = ckpt["model"]
 
+    n_actions = None
+    # First try to get the number of actions from the configuration
+    if "config" in ckpt:
+        config = ckpt["config"]
+        # Try to find the number of actions from the configuration
+        if "env" in config and hasattr(config["env"], "action_space"):
+            n_actions = config["env"].action_space.n
+        elif "n_actions" in config:
+            n_actions = config["n_actions"]
+        elif "action_space" in config:
+            n_actions = config["action_space"].n
+
+    # If it cannot be obtained from the configuration, use the original inference method
+    if n_actions is None:
+        for key in sorted(state_dict.keys(), reverse=True):
+            if ("adv" in key or "head" in key) and "bias" in key:
+                # Find the last bias layer whose dimension is the number of actions
+                if len(state_dict[key].shape) == 1:
+                    n_actions = state_dict[key].shape[0]
+                    break
+
+    if n_actions is None:
+        raise ValueError("Could not determine number of actions from checkpoint")
+
+    # Determine model class
     has_adv = any("adv" in key for key in state_dict.keys())
     has_val = any("val" in key for key in state_dict.keys())
     has_noisy = any("sigma" in key for key in state_dict.keys())
@@ -124,15 +154,6 @@ def load_model(ckpt_path: str, device: str = "cpu") -> Tuple[nn.Module, int]:
         model_class = NoisyDuelingDQN if has_noisy else DuelingDQN
     else:
         model_class = NoisyDQN if has_noisy else DQN
-
-    n_actions = None
-    for key in sorted(state_dict.keys(), reverse=True):
-        if ("adv" in key or "head" in key) and "3" in key and "bias" in key:
-            n_actions = state_dict[key].shape[0]
-            break
-
-    if n_actions is None:
-        raise ValueError("Could not determine number of actions from checkpoint")
 
     model = model_class(n_actions).to(device)
     model.load_state_dict(state_dict)
@@ -183,12 +204,12 @@ def evaluate_model(model: nn.Module, device: str = "cuda", episodes: int = 10,
 
 
 def train_dqn(
-    cfg: TrainingConfig,
-    log: CSVLogger,
-    run_dir: str,
-    on_step_callback: Optional[Callable[[int, Dict[str, Any]], bool]] = None,
-    on_episode_callback: Optional[Callable[[int, int, float, float, int], None]] = None,
-    on_checkpoint_callback: Optional[Callable[[int, str], None]] = None
+        cfg: TrainingConfig,
+        log: CSVLogger,
+        run_dir: str,
+        on_step_callback: Optional[Callable[[int, Dict[str, Any]], bool]] = None,
+        on_episode_callback: Optional[Callable[[int, int, float, float, int], None]] = None,
+        on_checkpoint_callback: Optional[Callable[[int, str], None]] = None
 ) -> Dict[str, Any]:
     """
     Core DQN training loop with callback support.
@@ -231,7 +252,41 @@ def train_dqn(
     q = create_model(cfg.model_type, n_actions).to(cfg.device)
     tgt = create_model(cfg.model_type, n_actions).to(cfg.device)
     tgt.load_state_dict(q.state_dict())
-    opt = torch.optim.Adam(q.parameters(), lr=cfg.lr)
+    opt = torch.optim.RMSprop(
+        q.parameters(),
+        lr=cfg.lr,
+        alpha=0.95,
+        eps=1e-5,
+        centered=False,
+        momentum=0.0
+    )
+
+    if cfg.start_from:
+        ckpt_path = os.path.expanduser(cfg.start_from)
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"start_from checkpoint not found: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        state_dict = ckpt.get("model") if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        if not isinstance(state_dict, dict):
+            raise ValueError(f"start_from checkpoint at {ckpt_path} does not contain a model state_dict")
+        missing, unexpected = q.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            print(f"[start_from] Warning: missing keys {missing}, unexpected keys {unexpected}")
+        tgt.load_state_dict(q.state_dict())
+        if isinstance(ckpt, dict) and "optimizer" in ckpt:
+            try:
+                opt.load_state_dict(ckpt["optimizer"])
+            except Exception as exc:  # pragma: no cover - best effort warning
+                print(f"[start_from] Could not load optimizer state: {exc}")
+        loaded_step = int(ckpt["step"]) if isinstance(ckpt, dict) and "step" in ckpt else 0
+        print(f"[start_from] Loaded initial weights from {ckpt_path} (checkpoint step {loaded_step})")
+
+    initial_lr = cfg.lr
+    final_lr = getattr(cfg, "lr_final", cfg.lr)
+    decay_steps = getattr(cfg, "lr_decay_steps", None)
+    if decay_steps is None or decay_steps <= 0:
+        decay_steps = cfg.total_steps
+    current_lr = initial_lr
 
     if cfg.use_prioritized_replay:
         replay = PrioritizedReplay(
@@ -244,7 +299,9 @@ def train_dqn(
         replay = Replay(cfg.replay_size)
 
     s, _ = env.reset(seed=cfg.seed)
-    s_t = to_tensor(s).to(cfg.device)
+    state_np = obs_to_numpy(s)
+    s_t = torch.from_numpy(state_np).to(cfg.device, dtype=torch.float32) / 255.0
+    s_t = s_t.unsqueeze(0)
     ep_return_raw, ep_return_shaped, ep_len, episode = 0.0, 0.0, 0, 0
     loss_val, q_mean = float("nan"), float("nan")
     best_eval_return = float("-inf")
@@ -255,6 +312,12 @@ def train_dqn(
         if is_noisy and hasattr(q, 'reset_noise'):
             q.reset_noise()  # type: ignore[attr-defined]
             tgt.reset_noise()  # type: ignore[attr-defined]
+
+        if final_lr != initial_lr:
+            frac = min(step / decay_steps, 1.0)
+            current_lr = initial_lr + (final_lr - initial_lr) * frac
+            for param_group in opt.param_groups:
+                param_group['lr'] = current_lr
 
         eps = max(cfg.eps_end, cfg.eps_start - (cfg.eps_start - cfg.eps_end) * (step / cfg.eps_decay_steps))
 
@@ -271,8 +334,11 @@ def train_dqn(
         ep_return_shaped += r
         ep_len += 1
 
-        replay.push(s_t.cpu().numpy()[0], a, r, to_tensor(s2).cpu().numpy()[0], done)
-        s_t = to_tensor(s2).to(cfg.device)
+        next_state_np = obs_to_numpy(s2)
+        replay.push(state_np.copy(), a, r, next_state_np.copy(), done)
+        state_np = next_state_np
+        s_t = torch.from_numpy(state_np).to(cfg.device, dtype=torch.float32) / 255.0
+        s_t = s_t.unsqueeze(0)
 
         if len(replay) >= cfg.warmup:
             if cfg.use_prioritized_replay:
@@ -285,10 +351,10 @@ def train_dqn(
                 weights = None
                 indices = None
 
-            s_b = torch.tensor(s_b, dtype=torch.float32, device=cfg.device)
+            s_b = torch.from_numpy(s_b).to(cfg.device, dtype=torch.float32) / 255.0
             a_b = torch.tensor(a_b, dtype=torch.int64, device=cfg.device)
             r_b = torch.tensor(r_b, dtype=torch.float32, device=cfg.device)
-            s2_b = torch.tensor(s2_b, dtype=torch.float32, device=cfg.device)
+            s2_b = torch.from_numpy(s2_b).to(cfg.device, dtype=torch.float32) / 255.0
             d_b = torch.tensor(d_b, dtype=torch.bool, device=cfg.device)
 
             with torch.no_grad():
@@ -305,7 +371,8 @@ def train_dqn(
                 td_errors = (qvals - y).abs()
                 loss = (weights * nn.functional.smooth_l1_loss(qvals, y, reduction='none')).mean()
                 if hasattr(replay, 'update_priorities'):
-                    replay.update_priorities(indices, td_errors.detach().cpu().numpy() + 1e-6)  # type: ignore[attr-defined]
+                    replay.update_priorities(indices,
+                                             td_errors.detach().cpu().numpy() + 1e-6)  # type: ignore[attr-defined]
             else:
                 loss = nn.functional.smooth_l1_loss(qvals, y)
 
@@ -328,7 +395,8 @@ def train_dqn(
                 "loss": loss_val,
                 "q_mean": q_mean,
                 "epsilon": eps if not is_noisy else 0.0,
-                "replay_size": len(replay)
+                "replay_size": len(replay),
+                "lr": current_lr
             })
             if should_stop:
                 break
@@ -344,7 +412,8 @@ def train_dqn(
                 loss=loss_val,
                 q_mean=q_mean,
                 epsilon=eps if not is_noisy else 0.0,
-                replay_size=len(replay)
+                replay_size=len(replay),
+                lr=current_lr
             )
 
             if on_episode_callback:
@@ -352,13 +421,15 @@ def train_dqn(
 
             ep_return_raw, ep_return_shaped, ep_len = 0.0, 0.0, 0
             s, _ = env.reset()
-            s_t = to_tensor(s).to(cfg.device)
+            state_np = obs_to_numpy(s)
+            s_t = torch.from_numpy(state_np).to(cfg.device, dtype=torch.float32) / 255.0
+            s_t = s_t.unsqueeze(0)
 
         if step % cfg.eval_every == 0:
             ckpt_dir = os.path.join(run_dir, "checkpoints")
             os.makedirs(ckpt_dir, exist_ok=True)
 
-            avg, std, avg_len = evaluate_model(q, device=cfg.device, episodes=10)
+            avg, std, avg_len = evaluate_model(q, device=cfg.device, episodes=cfg.eval_episodes)
             ckpt_path = os.path.join(ckpt_dir, f"step_{step}.pt")
             torch.save(
                 {
@@ -409,5 +480,6 @@ def train_dqn(
         "final_model": q,
         "target_model": tgt,
         "optimizer": opt,
-        "best_eval_return": best_eval_return
+        "best_eval_return": best_eval_return,
+        "final_lr": current_lr
     }

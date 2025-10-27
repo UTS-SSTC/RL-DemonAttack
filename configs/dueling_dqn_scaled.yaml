@@ -1,34 +1,36 @@
-# Baseline DQN Configuration
-# Nature DQN (Mnih et al., 2015) with standard hyperparameters
+# Scaled-Reward Dueling DQN Configuration
+# Variant that keeps longer training horizon, scaled rewards, and life-based episodes disabled.
 
 # Experiment Settings
-exp_name: baseline_dqn
-total_steps: 500000
-eval_every: 50000
-seed: 0
-device: cuda
+exp_name: dueling_dqn_scaled
+total_steps: 3000000
+eval_every: 100000
+seed: 42
+device: mps
 
 # Environment Settings
-terminal_on_life_loss: true
+terminal_on_life_loss: false
 screen_size: 84
 frame_stack: 4
 
 # Model Settings
-model_type: DQN  # Options: DQN, DuelingDQN, NoisyDQN, NoisyDuelingDQN
-reward_mode: clip  # Options: clip, scaled, raw
+model_type: DuelingDQN
+reward_mode: scaled
 
 # Training Hyperparameters
 gamma: 0.99
 lr: 0.0000625
+lr_final: 0.00001
+lr_decay_steps: 3000000
 batch_size: 32
-replay_size: 50000
-warmup: 5000
+replay_size: 150000
+warmup: 50000
 target_update_freq: 10000
-grad_clip: 10.0
+grad_clip: 5.0
 
 # Exploration Settings
 eps_start: 1.0
-eps_end: 0.1
+eps_end: 0.01
 eps_decay_steps: 1000000
 
 # Advanced Features
@@ -38,10 +40,13 @@ per_alpha: 0.6
 per_beta_start: 0.4
 per_beta_frames: 100000
 
-# Reward Shaping (optional)
+# Reward Shaping
 use_reward_shaping: false
 use_life_penalty: false
 life_penalty: -1.0
 use_streak_bonus: false
 streak_window: 12
 streak_bonus: 0.1
+
+# Evaluation
+eval_episodes: 20
