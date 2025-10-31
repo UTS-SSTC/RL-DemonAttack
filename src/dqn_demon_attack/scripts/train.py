@@ -29,7 +29,7 @@ def train_with_config(cfg: TrainingConfig):
         os.path.join(run_dir, "train_log.csv"),
         fieldnames=[
             "step", "episode", "ep_return_raw", "ep_return_shaped", "ep_len",
-            "loss", "q_mean", "epsilon", "replay_size"
+            "loss", "q_mean", "epsilon", "replay_size", "lr"
         ]
     )
 

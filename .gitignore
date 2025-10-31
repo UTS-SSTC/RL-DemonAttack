@@ -3,3 +3,5 @@
 /.claude
 /runs
 __pycache__
+/src/dqn_demon_attack.egg-info
+.DS_Store

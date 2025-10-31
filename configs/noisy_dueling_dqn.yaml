@@ -6,7 +6,8 @@ exp_name: noisy_dueling_dqn
 total_steps: 3000000
 eval_every: 100000
 seed: 42
-device: cuda
+device: mps
+start_from: null  # Optional path to checkpoint to bootstrap training
 
 # Environment Settings
 terminal_on_life_loss: true
@@ -20,8 +21,10 @@ reward_mode: clip
 # Training Hyperparameters
 gamma: 0.99
 lr: 0.0000625  # Lower LR for stability
+lr_final: 0.00002
+lr_decay_steps: 3000000
 batch_size: 32
-replay_size: 500000  # Very large buffer
+replay_size: 180000  # Large buffer within 16GB RAM budget
 warmup: 50000  # Longer warmup
 target_update_freq: 8000
 grad_clip: 10.0
@@ -45,3 +48,6 @@ life_penalty: -1.0
 use_streak_bonus: false
 streak_window: 12
 streak_bonus: 0.1
+
+# Evaluation
+eval_episodes: 20

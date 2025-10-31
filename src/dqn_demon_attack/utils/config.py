@@ -7,6 +7,7 @@ Provides YAML-based configuration loading and validation for training.
 import os
 from dataclasses import dataclass, field
 from typing import Optional
+import torch
 
 import yaml
 
@@ -23,7 +24,7 @@ class TrainingConfig:
     total_steps: int = 500_000
     eval_every: int = 50_000
     seed: int = 0
-    device: str = "cuda"
+    device: str = "cuda" if torch.cuda.is_available() else "mps"
 
     terminal_on_life_loss: bool = True
     screen_size: int = 84
@@ -33,7 +34,9 @@ class TrainingConfig:
     reward_mode: str = "clip"
 
     gamma: float = 0.99
-    lr: float = 1e-4
+    lr: float = 6.25e-5
+    lr_final: float = 6.25e-5
+    lr_decay_steps: Optional[int] = None
     batch_size: int = 32
     replay_size: int = 50_000
     warmup: int = 5_000
@@ -50,12 +53,15 @@ class TrainingConfig:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100_000
 
+    eval_episodes: int = 10
+
     use_reward_shaping: bool = False
     use_life_penalty: bool = False
     life_penalty: float = -1.0
     use_streak_bonus: bool = False
     streak_window: int = 12
     streak_bonus: float = 0.1
+    start_from: Optional[str] = None
 
 
 def load_config(config_path: str) -> TrainingConfig:
@@ -154,11 +160,23 @@ def validate_config(config: TrainingConfig) -> list[str]:
     if config.device not in ["cuda", "cpu", "mps"]:
         errors.append(f"Invalid device: {config.device}")
 
+    if config.lr_final > config.lr:
+        errors.append("lr_final must be <= lr")
+
+    if config.lr_decay_steps is not None and config.lr_decay_steps <= 0:
+        errors.append("lr_decay_steps must be positive if specified")
+
+    if config.eval_episodes <= 0:
+        errors.append("eval_episodes must be positive")
+
     if config.use_prioritized_replay:
         if not 0 <= config.per_alpha <= 1:
             errors.append("per_alpha must be in [0, 1]")
         if not 0 <= config.per_beta_start <= 1:
             errors.append("per_beta_start must be in [0, 1]")
+
+    if config.start_from is not None and not isinstance(config.start_from, str):
+        errors.append("start_from must be a string path or null")
 
     return errors
 

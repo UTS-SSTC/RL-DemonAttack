@@ -107,8 +107,7 @@ class DuelingDQN(nn.Module):
         feat = self.features(x)
         adv = self.adv(feat)
         val = self.val(feat)
-        q = val + adv - adv.mean(dim=1, keepdim=True)
-        return q
+        return val + adv - adv.mean(dim=1, keepdim=True)
 
 
 class NoisyLinear(nn.Module):
