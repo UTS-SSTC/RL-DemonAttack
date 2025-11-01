@@ -7,7 +7,7 @@ and core training loop logic used across training scripts and web interface.
 
 import os
 import random
-from typing import Tuple, Callable, Optional, Dict, Any
+from typing import Tuple, Callable, Optional, Dict, Any, Union
 
 import numpy as np
 import torch
@@ -288,6 +288,7 @@ def train_dqn(
         decay_steps = cfg.total_steps
     current_lr = initial_lr
 
+    replay: Union[Replay, PrioritizedReplay]
     if cfg.use_prioritized_replay:
         replay = PrioritizedReplay(
             cap=cfg.replay_size,
@@ -370,9 +371,8 @@ def train_dqn(
             if cfg.use_prioritized_replay and weights is not None and indices is not None:
                 td_errors = (qvals - y).abs()
                 loss = (weights * nn.functional.smooth_l1_loss(qvals, y, reduction='none')).mean()
-                if hasattr(replay, 'update_priorities'):
-                    replay.update_priorities(indices,
-                                             td_errors.detach().cpu().numpy() + 1e-6)  # type: ignore[attr-defined]
+                if isinstance(replay, PrioritizedReplay):
+                    replay.update_priorities(indices, td_errors.detach().cpu().numpy() + 1e-6)
             else:
                 loss = nn.functional.smooth_l1_loss(qvals, y)
 
@@ -429,7 +429,7 @@ def train_dqn(
             ckpt_dir = os.path.join(run_dir, "checkpoints")
             os.makedirs(ckpt_dir, exist_ok=True)
 
-            avg, std, avg_len = evaluate_model(q, device=cfg.device, episodes=cfg.eval_episodes)
+            avg, std, _ = evaluate_model(q, device=cfg.device, episodes=cfg.eval_episodes)
             ckpt_path = os.path.join(ckpt_dir, f"step_{step}.pt")
             torch.save(
                 {
