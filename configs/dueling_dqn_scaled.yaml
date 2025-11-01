@@ -6,7 +6,8 @@ exp_name: dueling_dqn_scaled
 total_steps: 3000000
 eval_every: 100000
 seed: 42
-device: mps
+device: cuda
+start_from: null
 
 # Environment Settings
 terminal_on_life_loss: false

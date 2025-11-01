@@ -6,8 +6,8 @@ exp_name: noisy_dueling_dqn
 total_steps: 3000000
 eval_every: 100000
 seed: 42
-device: mps
-start_from: null  # Optional path to checkpoint to bootstrap training
+device: cuda
+start_from: null
 
 # Environment Settings
 terminal_on_life_loss: true

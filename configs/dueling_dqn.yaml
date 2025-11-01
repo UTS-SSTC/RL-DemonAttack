@@ -2,12 +2,12 @@
 # Dueling architecture (Wang et al., 2016) with optimized hyperparameters
 
 # Experiment Settings
-exp_name: dueling_dqn123
+exp_name: dueling_dqn
 total_steps: 2000000
 eval_every: 100000
 seed: 42
-device: mps
-start_from: /Volumes/Data/code/final.pt  # Optional checkpoint to initialize weights
+device: cuda
+start_from: null
 
 # Environment Settings
 terminal_on_life_loss: true
