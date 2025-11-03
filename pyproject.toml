@@ -21,7 +21,7 @@ dependencies = [
 
 [project.scripts]
 train = "dqn_demon_attack.scripts.train:main"
-eval = "dqn_demon_attack.scripts.eval:evaluate"
+eval = "dqn_demon_attack.scripts.eval:main"
 watch = "dqn_demon_attack.scripts.watch:main"
 viz = "dqn_demon_attack.utils.viz:main"
 web = "dqn_demon_attack.web.app:main"
