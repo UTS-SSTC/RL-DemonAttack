@@ -63,6 +63,11 @@ class TrainingConfig:
     streak_bonus: float = 0.1
     start_from: Optional[str] = None
 
+    record_breakthrough: bool = False
+    breakthrough_threshold: float = 0.15
+    max_videos: int = 10
+    log_file: Optional[str] = None
+
 
 def load_config(config_path: str) -> TrainingConfig:
     """

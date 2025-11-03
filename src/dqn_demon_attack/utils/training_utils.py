@@ -8,10 +8,12 @@ and core training loop logic used across training scripts and web interface.
 import os
 import random
 from typing import Tuple, Callable, Optional, Dict, Any, Union
+from pathlib import Path
 
 import numpy as np
 import torch
 from gymnasium.spaces import Discrete
+from gymnasium.wrappers import RecordVideo
 from torch import nn
 
 from dqn_demon_attack.agents import DQN, DuelingDQN, NoisyDQN, NoisyDuelingDQN, Replay, PrioritizedReplay
@@ -203,6 +205,68 @@ def evaluate_model(model: nn.Module, device: str = "cuda", episodes: int = 10,
     return float(np.mean(returns)), float(np.std(returns)), float(np.mean(lengths))
 
 
+def record_breakthrough_video(
+        model: nn.Module,
+        device: str,
+        video_dir: str,
+        step: int,
+        reward: float,
+        stack: int = 4,
+        screen_size: int = 84
+) -> Optional[str]:
+    """
+    Record a single episode video for a breakthrough moment.
+
+    Args:
+        model: Q-network to use for action selection.
+        device: Device for inference.
+        video_dir: Directory to save video.
+        step: Training step number (for filename).
+        reward: Episode return (for filename).
+        stack: Frame stack count for environment.
+        screen_size: Screen size for environment.
+
+    Returns:
+        Path to recorded video file, or None if recording failed.
+    """
+    os.makedirs(video_dir, exist_ok=True)
+
+    video_name = f"breakthrough_step{step}_reward{int(reward)}"
+
+    env = make_env(render_mode="rgb_array", stack=stack, screen_size=screen_size)
+    env = RecordVideo(
+        env,
+        video_folder=video_dir,
+        name_prefix=video_name,
+        episode_trigger=lambda _: True
+    )
+
+    model.eval()
+    try:
+        s, _ = env.reset()
+        s_t = to_tensor(s).to(device)
+        done = False
+
+        while not done:
+            with torch.no_grad():
+                a = model(s_t).argmax(1).item()
+            s2, _, term, trunc, _ = env.step(a)
+            done = term or trunc
+            s_t = to_tensor(s2).to(device)
+
+        env.close()
+
+        video_files = list(Path(video_dir).glob(f"{video_name}*.mp4"))
+        if video_files:
+            return str(video_files[0])
+        return None
+    except Exception as e:
+        print(f"Warning: Failed to record breakthrough video: {e}")
+        return None
+    finally:
+        model.train()
+
+
 def train_dqn(
         cfg: TrainingConfig,
         log: CSVLogger,
@@ -308,6 +372,12 @@ def train_dqn(
     best_eval_return = float("-inf")
 
     is_noisy = "Noisy" in cfg.model_type
+
+    breakthrough_best_return = float("-inf")
+    breakthrough_videos = []
+    video_dir = os.path.join(run_dir, "videos")
+    if cfg.record_breakthrough:
+        os.makedirs(video_dir, exist_ok=True)
 
     for step in range(1, cfg.total_steps + 1):
         if is_noisy and hasattr(q, 'reset_noise'):
@@ -418,6 +488,42 @@ def train_dqn(
 
             if on_episode_callback:
                 on_episode_callback(episode, step, ep_return_raw, ep_return_shaped, ep_len)
+
+            if cfg.record_breakthrough and len(replay) >= cfg.warmup:
+                if breakthrough_best_return == float("-inf"):
+                    breakthrough_best_return = ep_return_raw
+                else:
+                    improvement = (ep_return_raw - breakthrough_best_return) / max(abs(breakthrough_best_return), 1e-6)
+                    if improvement >= cfg.breakthrough_threshold:
+                        print(f"[Breakthrough] Episode {episode} at step {step}: {ep_return_raw:.1f} "
+                              f"(+{improvement*100:.1f}% from {breakthrough_best_return:.1f})")
+                        video_path = record_breakthrough_video(
+                            model=q,
+                            device=cfg.device,
+                            video_dir=video_dir,
+                            step=step,
+                            reward=ep_return_raw,
+                            stack=cfg.frame_stack,
+                            screen_size=cfg.screen_size
+                        )
+                        if video_path:
+                            breakthrough_videos.append({
+                                "step": step,
+                                "episode": episode,
+                                "return": ep_return_raw,
+                                "path": video_path
+                            })
+                            print(f"[Breakthrough] Video saved: {video_path}")
+
+                            while len(breakthrough_videos) > cfg.max_videos:
+                                old_video = breakthrough_videos.pop(0)
+                                try:
+                                    os.remove(old_video["path"])
+                                    print(f"[Breakthrough] Removed old video: {old_video['path']}")
+                                except Exception as e:
+                                    print(f"[Breakthrough] Failed to remove old video: {e}")
+
+                        breakthrough_best_return = ep_return_raw
 
             ep_return_raw, ep_return_shaped, ep_len = 0.0, 0.0, 0
             s, _ = env.reset()

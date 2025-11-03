@@ -1,23 +1,19 @@
 """
 Training manager for web-based DQN training interface.
 
-Handles training execution, progress tracking, breakthrough video recording,
-and metrics collection for visualization.
+Handles training execution via CLI subprocess, progress tracking through
+file monitoring, and metrics collection for visualization.
 """
 
 import os
+import csv
 import time
-import threading
+import subprocess
 from typing import Optional, Dict, List, Any
-from collections import deque
-from dataclasses import dataclass, asdict
+from pathlib import Path
+from dataclasses import dataclass
 
-import torch
-from gymnasium.wrappers import RecordVideo
-
-from dqn_demon_attack.envs import make_env, RewardConfig
-from dqn_demon_attack.utils import TrainingConfig, CSVLogger
-from dqn_demon_attack.utils.training_utils import train_dqn, to_tensor
+from dqn_demon_attack.utils import TrainingConfig, save_config
 
 
 @dataclass
@@ -29,7 +25,6 @@ class WebTrainingConfig(TrainingConfig):
 
     def __init__(self, **kwargs):
         valid_fields = {f.name for f in TrainingConfig.__dataclass_fields__.values()}
-        web_fields = {"max_videos", "breakthrough_threshold"}
 
         base_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
         super().__init__(**base_kwargs)
@@ -40,22 +35,20 @@ class WebTrainingConfig(TrainingConfig):
 
 class TrainingManager:
     """
-    Manages DQN training sessions with real-time monitoring and video recording.
+    Manages DQN training sessions via CLI subprocess with file-based monitoring.
 
-    Supports concurrent training execution, breakthrough detection, automatic
-    video recording of high-performing episodes, and metrics tracking.
+    Executes training using CLI commands and monitors progress by reading
+    CSV logs, text logs, and scanning for videos/checkpoints.
     """
 
     def __init__(self, base_dir: str = "runs"):
         self.base_dir = base_dir
         self.current_session: Optional[Dict[str, Any]] = None
-        self.training_thread: Optional[threading.Thread] = None
-        self.stop_flag = threading.Event()
-        self.lock = threading.Lock()
+        self.process: Optional[subprocess.Popen] = None
 
     def start_training(self, config: WebTrainingConfig) -> Dict[str, str]:
         """
-        Start a new training session in background thread.
+        Start a new training session via CLI subprocess.
 
         Args:
             config: Training configuration parameters.
@@ -63,74 +56,192 @@ class TrainingManager:
         Returns:
             Dict containing session_id and run_dir.
         """
-        with self.lock:
-            if self.is_training():
-                raise RuntimeError("Training already in progress")
+        if self.is_training():
+            raise RuntimeError("Training already in progress")
 
-            session_id = f"{config.exp_name}_{int(time.time())}"
-            run_dir = os.path.join(self.base_dir, session_id)
-            os.makedirs(run_dir, exist_ok=True)
+        session_id = f"{config.exp_name}_{int(time.time())}"
+        run_dir = os.path.join(self.base_dir, session_id)
+        os.makedirs(run_dir, exist_ok=True)
 
-            self.current_session = {
-                "session_id": session_id,
-                "run_dir": run_dir,
-                "config": config,
-                "status": "running",
-                "start_time": time.time(),
-                "current_step": 0,
-                "total_steps": config.total_steps,
-                "logs": deque(maxlen=1000),
-                "metrics": {
-                    "episodes": [],
-                    "returns": [],
-                    "losses": [],
-                    "q_values": [],
-                    "steps": [],
-                },
-                "videos": [],
-                "best_return": float("-inf"),
-                "checkpoints": [],
-            }
+        config.exp_name = session_id
+        config_path = os.path.join(run_dir, "config.yaml")
+        save_config(config, config_path)
 
-            self.stop_flag.clear()
-            self.training_thread = threading.Thread(
-                target=self._train_loop,
-                args=(config, run_dir),
-                daemon=True
-            )
-            self.training_thread.start()
+        log_file = os.path.join(run_dir, "train.log")
+        config.log_file = log_file
 
-            return {"session_id": session_id, "run_dir": run_dir}
+        cmd = [
+            "uv", "run", "train",
+            "--config", config_path,
+        ]
+
+        if config.record_breakthrough:
+            cmd.extend([
+                "--record-breakthrough",
+                "--breakthrough-threshold", str(config.breakthrough_threshold),
+                "--max-videos", str(config.max_videos),
+            ])
+
+        cmd.extend([
+            "--log-file", log_file
+        ])
+
+        log_file_handle = open(log_file, 'w', encoding='utf-8')
+
+        self.process = subprocess.Popen(
+            cmd,
+            cwd=os.getcwd(),
+            stdout=log_file_handle,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+
+        self.current_session = {
+            "session_id": session_id,
+            "run_dir": run_dir,
+            "config": config,
+            "status": "running",
+            "start_time": time.time(),
+            "total_steps": config.total_steps,
+            "process": self.process,
+            "log_file_handle": log_file_handle,
+        }
+
+        return {"session_id": session_id, "run_dir": run_dir}
 
     def stop_training(self):
-        """Request training to stop gracefully."""
-        self.stop_flag.set()
+        """Terminate training process."""
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+        if self.current_session and "log_file_handle" in self.current_session:
+            try:
+                self.current_session["log_file_handle"].close()
+            except Exception:
+                pass
 
     def is_training(self) -> bool:
-        """Check if training is currently active."""
-        return self.training_thread is not None and self.training_thread.is_alive()
+        """Check if training process is currently active."""
+        return self.process is not None and self.process.poll() is None
 
     def get_status(self) -> Optional[Dict[str, Any]]:
         """
-        Get current training status and metrics.
+        Get current training status by reading files.
 
         Returns:
-            Dict with status, progress, logs, and metrics, or None if not training.
+            Dict with status, progress, logs, metrics, and videos.
         """
-        with self.lock:
-            if self.current_session is None:
-                return None
+        if self.current_session is None:
+            return None
 
-            session = self.current_session.copy()
-            session["logs"] = list(session["logs"])
-            session["is_active"] = self.is_training()
+        session = self.current_session.copy()
+        run_dir = session["run_dir"]
 
-            if session["current_step"] > 0:
-                elapsed = time.time() - session["start_time"]
-                session["elapsed_time"] = elapsed
-                session["progress"] = session["current_step"] / session["total_steps"]
+        if "process" in session:
+            del session["process"]
+        if "config" in session:
+            del session["config"]
+        if "log_file_handle" in session:
+            del session["log_file_handle"]
 
-            return session
+        session["is_active"] = self.is_training()
+
+        if not self.is_training() and session["status"] == "running":
+            if self.current_session and "log_file_handle" in self.current_session:
+                try:
+                    self.current_session["log_file_handle"].close()
+                except Exception:
+                    pass
+
+            if self.process and self.process.returncode == 0:
+                session["status"] = "completed"
+            else:
+                session["status"] = "failed"
+
+        csv_path = os.path.join(run_dir, "train_log.csv")
+        current_step = 0
+        metrics = {
+            "episodes": [],
+            "returns": [],
+            "losses": [],
+            "q_values": [],
+            "steps": [],
+        }
+
+        if os.path.exists(csv_path):
+            try:
+                with open(csv_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+                    if rows:
+                        current_step = int(rows[-1]["step"])
+                        for row in rows[-100:]:
+                            metrics["episodes"].append(int(row["episode"]))
+                            metrics["returns"].append(float(row["ep_return_raw"]))
+                            metrics["steps"].append(int(row["step"]))
+                            loss = row.get("loss", "nan")
+                            metrics["losses"].append(float(loss) if loss != "nan" else None)
+                            q_val = row.get("q_mean", "nan")
+                            metrics["q_values"].append(float(q_val) if q_val != "nan" else None)
+            except Exception as e:
+                print(f"Warning: Failed to read CSV: {e}")
+
+        session["current_step"] = current_step
+        session["metrics"] = metrics
+
+        if current_step > 0:
+            elapsed = time.time() - session["start_time"]
+            session["elapsed_time"] = elapsed
+            session["progress"] = current_step / session["total_steps"]
+        else:
+            session["progress"] = 0.0
+
+        log_path = os.path.join(run_dir, "train.log")
+        logs = []
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    logs = [{"message": line.strip()} for line in lines[-50:] if line.strip()]
+            except Exception as e:
+                print(f"Warning: Failed to read log file: {e}")
+
+        session["logs"] = logs
+
+        video_dir = os.path.join(run_dir, "videos")
+        videos = []
+        if os.path.exists(video_dir):
+            try:
+                for video_file in Path(video_dir).glob("*.mp4"):
+                    videos.append({
+                        "path": str(video_file),
+                        "name": video_file.name,
+                        "size": video_file.stat().st_size,
+                    })
+            except Exception as e:
+                print(f"Warning: Failed to scan videos: {e}")
+
+        session["videos"] = videos
+
+        ckpt_dir = os.path.join(run_dir, "checkpoints")
+        checkpoints = []
+        if os.path.exists(ckpt_dir):
+            try:
+                for ckpt_file in Path(ckpt_dir).glob("*.pt"):
+                    checkpoints.append({
+                        "path": str(ckpt_file),
+                        "name": ckpt_file.name,
+                    })
+            except Exception as e:
+                print(f"Warning: Failed to scan checkpoints: {e}")
+
+        session["checkpoints"] = checkpoints
+
+        return session
 
     def get_training_curves(self, session_id: str) -> Dict[str, Any]:
         """
@@ -148,7 +259,6 @@ class TrainingManager:
         if not os.path.exists(csv_path):
             return {"error": "Training log not found"}
 
-        import csv
         data = {
             "steps": [],
             "episodes": [],
@@ -160,7 +270,7 @@ class TrainingManager:
             "epsilon": [],
         }
 
-        with open(csv_path, "r") as f:
+        with open(csv_path, "r", encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 data["steps"].append(int(row["step"]))
@@ -178,180 +288,3 @@ class TrainingManager:
                 data["epsilon"].append(float(row["epsilon"]))
 
         return data
-
-
-    def _should_record_video(self, current_return: float, best_return: float, threshold: float) -> bool:
-        """Determine if current episode represents a breakthrough."""
-        if best_return == float("-inf"):
-            return False
-        improvement = (current_return - best_return) / (abs(best_return) + 1e-6)
-        return improvement >= threshold
-
-    def _log_message(self, message: str):
-        """Add message to training logs."""
-        with self.lock:
-            if self.current_session:
-                self.current_session["logs"].append({
-                    "time": time.time(),
-                    "message": message
-                })
-
-    def _record_breakthrough_video(self, q, env_maker, device: str, run_dir: str,
-                                   step: int, reward: float) -> str:
-        """
-        Record video of breakthrough episode.
-
-        Args:
-            q: Q-network model.
-            env_maker: Function to create environment.
-            device: Device for inference.
-            run_dir: Directory to save video.
-            step: Current training step.
-            reward: Episode reward achieved.
-
-        Returns:
-            Path to recorded video file.
-        """
-        video_dir = os.path.join(run_dir, "videos")
-        os.makedirs(video_dir, exist_ok=True)
-
-        env = env_maker()
-        env = RecordVideo(
-            env,
-            video_folder=video_dir,
-            episode_trigger=lambda e: e == 0,
-            name_prefix=f"breakthrough_step{step}_reward{int(reward)}"
-        )
-
-        q.eval()
-        s, _ = env.reset()
-        done = False
-
-        while not done:
-            s_t = to_tensor(s).to(device)
-            with torch.no_grad():
-                a = q(s_t).argmax(1).item()
-            s, r, term, trunc, info = env.step(a)
-            done = term or trunc
-
-        env.close()
-        q.train()
-
-        video_files = [f for f in os.listdir(video_dir) if f.endswith(".mp4")]
-        if video_files:
-            return os.path.join(video_dir, video_files[-1])
-        return ""
-
-    def _train_loop(self, cfg: WebTrainingConfig, run_dir: str):
-        """
-        Main training loop executed in background thread.
-
-        Args:
-            cfg: Training configuration.
-            run_dir: Directory for saving outputs.
-        """
-        try:
-            self._log_message(f"Training started: {cfg.total_steps} steps")
-
-            log = CSVLogger(
-                os.path.join(run_dir, "train_log.csv"),
-                fieldnames=[
-                    "step", "episode", "ep_return_raw", "ep_return_shaped", "ep_len",
-                    "loss", "q_mean", "epsilon", "replay_size", "lr"
-                ]
-            )
-
-            recent_returns = deque(maxlen=10)
-            current_q_network = None
-
-            def on_step_callback(step: int, metrics: Dict[str, Any]) -> bool:
-                with self.lock:
-                    if self.current_session:
-                        self.current_session["current_step"] = step
-
-                return self.stop_flag.is_set()
-
-            def on_episode_callback(episode: int, step: int, ep_return_raw: float,
-                                   ep_return_shaped: float, ep_len: int):
-                nonlocal current_q_network
-
-                with self.lock:
-                    if self.current_session:
-                        self.current_session["metrics"]["episodes"].append(episode)
-                        self.current_session["metrics"]["returns"].append(ep_return_raw)
-                        self.current_session["metrics"]["steps"].append(step)
-
-                recent_returns.append(ep_return_raw)
-                avg_recent = sum(recent_returns) / len(recent_returns) if recent_returns else 0.0
-
-                with self.lock:
-                    if self.current_session and ep_return_raw > self.current_session["best_return"]:
-                        improvement = ep_return_raw - self.current_session["best_return"]
-
-                        if self._should_record_video(ep_return_raw, self.current_session["best_return"],
-                                                     cfg.breakthrough_threshold):
-                            self._log_message(f"Breakthrough detected at step {step}: reward {ep_return_raw:.1f} (improvement: {improvement:.1f})")
-
-                            if len(self.current_session["videos"]) >= cfg.max_videos:
-                                oldest_video = self.current_session["videos"].pop(0)
-                                if os.path.exists(oldest_video["path"]):
-                                    os.remove(oldest_video["path"])
-
-                            reward_cfg = RewardConfig(mode=cfg.reward_mode)
-                            env_maker = lambda: make_env(
-                                render_mode="rgb_array",
-                                stack=cfg.frame_stack,
-                                screen_size=cfg.screen_size,
-                                terminal_on_life_loss=cfg.terminal_on_life_loss,
-                                reward_cfg=reward_cfg
-                            )
-
-                            if current_q_network is not None:
-                                video_path = self._record_breakthrough_video(
-                                    current_q_network, env_maker, cfg.device, run_dir, step, ep_return_raw
-                                )
-
-                                if video_path:
-                                    self.current_session["videos"].append({
-                                        "step": step,
-                                        "reward": ep_return_raw,
-                                        "path": video_path,
-                                        "timestamp": time.time()
-                                    })
-
-                        self.current_session["best_return"] = ep_return_raw
-
-                self._log_message(f"Episode {episode} | Step {step} | Return: {ep_return_raw:.1f} | Avg: {avg_recent:.1f}")
-
-            def on_checkpoint_callback(step: int, ckpt_path: str):
-                with self.lock:
-                    if self.current_session:
-                        self.current_session["checkpoints"].append({
-                            "step": step,
-                            "path": ckpt_path
-                        })
-                self._log_message(f"Checkpoint saved at step {step}")
-
-            result = train_dqn(
-                cfg=cfg,
-                log=log,
-                run_dir=run_dir,
-                on_step_callback=on_step_callback,
-                on_episode_callback=on_episode_callback,
-                on_checkpoint_callback=on_checkpoint_callback
-            )
-
-            current_q_network = result["final_model"]
-
-            with self.lock:
-                if self.current_session:
-                    self.current_session["status"] = "completed"
-
-            self._log_message("Training completed successfully")
-
-        except Exception as e:
-            self._log_message(f"Training failed: {str(e)}")
-            with self.lock:
-                if self.current_session:
-                    self.current_session["status"] = "failed"
-            raise

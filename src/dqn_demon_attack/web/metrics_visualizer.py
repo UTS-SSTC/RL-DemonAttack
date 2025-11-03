@@ -4,7 +4,6 @@ Metrics visualization utilities for training curves.
 Provides functions to generate training curve plots from CSV logs.
 """
 
-import csv
 import os
 from typing import List, Dict, Optional
 
@@ -12,6 +11,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+
+from dqn_demon_attack.utils.viz import read_csv, to_float, moving_average
 
 
 def read_training_log(log_path: str) -> Dict[str, List]:
@@ -24,24 +25,21 @@ def read_training_log(log_path: str) -> Dict[str, List]:
     Returns:
         Dictionary mapping column names to lists of values.
     """
-    data = {}
-
     if not os.path.exists(log_path):
-        return data
+        return {}
 
-    with open(log_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            for key, value in row.items():
-                if key not in data:
-                    data[key] = []
-                try:
-                    if key in ['step', 'episode', 'ep_len', 'replay_size']:
-                        data[key].append(int(value))
-                    else:
-                        data[key].append(float(value))
-                except (ValueError, TypeError):
-                    data[key].append(value)
+    rows = read_csv(log_path)
+    if not rows:
+        return {}
+
+    data = {}
+    int_keys = ['step', 'episode', 'ep_len', 'replay_size']
+
+    for key in rows[0].keys():
+        if key in int_keys:
+            data[key] = [int(row[key]) for row in rows if row.get(key)]
+        else:
+            data[key] = to_float(rows, key)
 
     return data
 
@@ -70,28 +68,18 @@ def plot_training_curves(
     if not data or 'step' not in data:
         return False
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    if os.path.dirname(output_path):
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle('Training Curves', fontsize=16, fontweight='bold')
-
-    def smooth(values, window):
-        """Apply moving average smoothing."""
-        if len(values) < window:
-            return values
-        smoothed = []
-        for i in range(len(values)):
-            start = max(0, i - window // 2)
-            end = min(len(values), i + window // 2 + 1)
-            smoothed.append(np.mean(values[start:end]))
-        return smoothed
 
     steps = data.get('step', [])
 
     if 'ep_return_raw' in data:
         ax = axes[0, 0]
         returns = data['ep_return_raw']
-        returns_smooth = smooth(returns, smooth_window)
+        returns_smooth = moving_average(returns, smooth_window)
 
         ax.plot(steps, returns, alpha=0.3, color='blue', linewidth=0.5, label='Raw')
         ax.plot(steps, returns_smooth, color='blue', linewidth=2, label='Smoothed')
@@ -105,7 +93,7 @@ def plot_training_curves(
         ax = axes[0, 1]
         loss = [v for v in data['loss'] if not np.isnan(v)]
         loss_steps = steps[:len(loss)]
-        loss_smooth = smooth(loss, smooth_window)
+        loss_smooth = moving_average(loss, smooth_window)
 
         ax.plot(loss_steps, loss, alpha=0.3, color='red', linewidth=0.5, label='Raw')
         ax.plot(loss_steps, loss_smooth, color='red', linewidth=2, label='Smoothed')
@@ -119,7 +107,7 @@ def plot_training_curves(
         ax = axes[1, 0]
         q_mean = [v for v in data['q_mean'] if not np.isnan(v)]
         q_steps = steps[:len(q_mean)]
-        q_smooth = smooth(q_mean, smooth_window)
+        q_smooth = moving_average(q_mean, smooth_window)
 
         ax.plot(q_steps, q_mean, alpha=0.3, color='green', linewidth=0.5, label='Raw')
         ax.plot(q_steps, q_smooth, color='green', linewidth=2, label='Smoothed')

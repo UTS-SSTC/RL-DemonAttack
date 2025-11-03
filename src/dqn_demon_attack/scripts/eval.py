@@ -167,11 +167,37 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained DQN model")
     parser.add_argument("--ckpt", type=str, required=True, help="Path to checkpoint file")
     parser.add_argument("--episodes", type=int, default=10, help="Number of evaluation episodes")
+    parser.add_argument("--device", type=str, default=None, help="Device to use (cuda/cpu/mps)")
+    parser.add_argument("--record", action="store_true", help="Record videos of evaluation episodes")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directory to save videos")
+    parser.add_argument("--json-output", type=str, default=None, help="Path to save results as JSON")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "mps"
-    results = evaluate(args.ckpt, args.episodes, device=device)
+    if args.device is None:
+        device = "cuda" if torch.cuda.is_available() else "mps"
+    else:
+        device = args.device
+
+    video_folder = None
+    if args.record:
+        if args.output_dir:
+            video_folder = args.output_dir
+        else:
+            ckpt_dir = os.path.dirname(args.ckpt)
+            video_folder = os.path.join(ckpt_dir, "eval_videos")
+        os.makedirs(video_folder, exist_ok=True)
+
+    results = evaluate(args.ckpt, args.episodes, device=device, video_folder=video_folder)
     print_evaluation_summary(results)
+
+    if args.json_output:
+        import json
+        json_dir = os.path.dirname(args.json_output)
+        if json_dir:
+            os.makedirs(json_dir, exist_ok=True)
+        with open(args.json_output, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults saved to: {args.json_output}")
 
 
 if __name__ == "__main__":

@@ -1,29 +1,27 @@
 """
 Evaluation manager for web-based model performance assessment.
 
-Handles model loading, evaluation execution with video recording,
+Handles model evaluation via CLI subprocess with video recording
 and comprehensive metrics collection for display.
 """
 
 import os
+import json
 import time
 import threading
+import subprocess
 from typing import Optional, Dict, List, Any
+from pathlib import Path
 
 import numpy as np
-import torch
-from gymnasium.wrappers import RecordVideo, RecordEpisodeStatistics
-
-from dqn_demon_attack.envs import make_env
-from dqn_demon_attack.utils.training_utils import load_model, to_tensor
 
 
 class EvaluationManager:
     """
-    Manages model evaluation with video recording and metrics tracking.
+    Manages model evaluation via CLI subprocess with file-based result tracking.
 
-    Supports loading trained models, running evaluation episodes,
-    recording videos, and collecting comprehensive performance metrics.
+    Executes evaluation using CLI commands and collects results from
+    JSON output and video files.
     """
 
     def __init__(self, base_dir: str = "runs"):
@@ -66,7 +64,7 @@ class EvaluationManager:
     def start_evaluation(self, checkpoint_path: str, num_episodes: int = 10,
                         record_video: bool = True, device: str = "cuda") -> Dict[str, str]:
         """
-        Start evaluation in background thread.
+        Start evaluation via CLI subprocess.
 
         Args:
             checkpoint_path: Path to model checkpoint.
@@ -83,7 +81,10 @@ class EvaluationManager:
 
             eval_id = f"eval_{int(time.time())}"
             video_dir = os.path.join(os.path.dirname(checkpoint_path), "..", "eval_videos", eval_id)
+            video_dir = os.path.normpath(video_dir)
             os.makedirs(video_dir, exist_ok=True)
+
+            json_output = os.path.join(video_dir, "results.json")
 
             self.current_eval = {
                 "eval_id": eval_id,
@@ -99,12 +100,13 @@ class EvaluationManager:
                     "q_stds": []
                 },
                 "videos": [],
-                "video_dir": video_dir
+                "video_dir": video_dir,
+                "json_output": json_output
             }
 
             self.eval_thread = threading.Thread(
-                target=self._eval_loop,
-                args=(checkpoint_path, num_episodes, record_video, device, video_dir),
+                target=self._eval_subprocess,
+                args=(checkpoint_path, num_episodes, record_video, device, video_dir, json_output),
                 daemon=True
             )
             self.eval_thread.start()
@@ -126,13 +128,40 @@ class EvaluationManager:
             if self.current_eval is None:
                 return None
 
-            eval_data = self.current_eval.copy()
+            completed_episodes = self.current_eval["completed_episodes"]
+
+            if self.is_evaluating() and completed_episodes == 0:
+                video_dir = self.current_eval["video_dir"]
+                if os.path.exists(video_dir):
+                    video_files = list(Path(video_dir).glob("*.mp4"))
+                    completed_episodes = len(video_files)
+
+            eval_data = {
+                "eval_id": self.current_eval["eval_id"],
+                "checkpoint_path": self.current_eval["checkpoint_path"],
+                "num_episodes": self.current_eval["num_episodes"],
+                "status": self.current_eval["status"],
+                "start_time": self.current_eval["start_time"],
+                "completed_episodes": completed_episodes,
+                "results": {
+                    "returns": list(self.current_eval["results"]["returns"]),
+                    "lengths": list(self.current_eval["results"]["lengths"]),
+                    "q_means": list(self.current_eval["results"]["q_means"]),
+                    "q_stds": list(self.current_eval["results"]["q_stds"])
+                },
+                "videos": [dict(v) for v in self.current_eval["videos"]],
+                "video_dir": self.current_eval["video_dir"]
+            }
+
+            if "end_time" in self.current_eval:
+                eval_data["end_time"] = self.current_eval["end_time"]
+
             eval_data["is_active"] = self.is_evaluating()
 
-            if eval_data["completed_episodes"] > 0:
+            if completed_episodes > 0:
                 elapsed = time.time() - eval_data["start_time"]
                 eval_data["elapsed_time"] = elapsed
-                eval_data["progress"] = eval_data["completed_episodes"] / eval_data["num_episodes"]
+                eval_data["progress"] = completed_episodes / eval_data["num_episodes"]
 
                 results = eval_data["results"]
                 if results["returns"]:
@@ -142,16 +171,15 @@ class EvaluationManager:
                         "min_return": float(np.min(results["returns"])),
                         "max_return": float(np.max(results["returns"])),
                         "mean_length": float(np.mean(results["lengths"])),
-                        "mean_q": float(np.mean([q for q in results["q_means"] if q is not None])) if results["q_means"] else None,
+                        "mean_q": float(np.mean([q for q in results["q_means"] if q is not None])) if [q for q in results["q_means"] if q is not None] else 0.0,
                     }
 
             return eval_data
 
-
-    def _eval_loop(self, checkpoint_path: str, num_episodes: int,
-                   record_video: bool, device: str, video_dir: str):
+    def _eval_subprocess(self, checkpoint_path: str, num_episodes: int,
+                        record_video: bool, device: str, video_dir: str, json_output: str):
         """
-        Main evaluation loop executed in background thread.
+        Run evaluation via CLI subprocess.
 
         Args:
             checkpoint_path: Path to model checkpoint.
@@ -159,77 +187,74 @@ class EvaluationManager:
             record_video: Whether to record videos.
             device: Device for inference.
             video_dir: Directory to save videos.
+            json_output: Path to save JSON results.
         """
         try:
-            q, _ = load_model(checkpoint_path, device)
+            cmd = [
+                "uv", "run", "eval",
+                "--ckpt", checkpoint_path,
+                "--episodes", str(num_episodes),
+                "--device", device,
+                "--json-output", json_output
+            ]
 
-            for episode in range(num_episodes):
-                if record_video:
-                    env = make_env(render_mode="rgb_array")
-                    env = RecordVideo(
-                        env,
-                        video_folder=video_dir,
-                        episode_trigger=lambda e: e == 0,
-                        name_prefix=f"episode_{episode}"
-                    )
-                else:
-                    env = make_env(render_mode=None)
+            if record_video:
+                cmd.extend([
+                    "--record",
+                    "--output-dir", video_dir
+                ])
 
-                env = RecordEpisodeStatistics(env)
+            result = subprocess.run(
+                cmd,
+                cwd=os.getcwd(),
+                capture_output=True,
+                text=True
+            )
 
-                s, _ = env.reset()
-                done = False
-                ep_return = 0.0
-                ep_len = 0
-                q_vals_episode = []
+            if result.returncode != 0:
+                raise RuntimeError(f"Evaluation failed: {result.stderr}")
 
-                while not done:
-                    s_t = to_tensor(s).to(device)
-                    with torch.no_grad():
-                        q_vals = q(s_t)
-                        a = q_vals.argmax(1).item()
-                        q_vals_episode.append({
-                            "mean": float(q_vals.mean().item()),
-                            "std": float(q_vals.std().item())
-                        })
-
-                    s, r, term, trunc, info = env.step(a)
-                    done = term or trunc
-                    ep_return += float(info.get("raw_reward", r))
-                    ep_len += 1
-
-                env.close()
-
-                q_mean = np.mean([qv["mean"] for qv in q_vals_episode]) if q_vals_episode else None
-                q_std = np.mean([qv["std"] for qv in q_vals_episode]) if q_vals_episode else None
+            if os.path.exists(json_output):
+                with open(json_output, 'r', encoding='utf-8') as f:
+                    results = json.load(f)
 
                 with self.lock:
                     if self.current_eval:
-                        self.current_eval["completed_episodes"] = episode + 1
-                        self.current_eval["results"]["returns"].append(ep_return)
-                        self.current_eval["results"]["lengths"].append(ep_len)
-                        self.current_eval["results"]["q_means"].append(q_mean)
-                        self.current_eval["results"]["q_stds"].append(q_std)
+                        self.current_eval["results"]["returns"] = results["returns"]
+                        self.current_eval["results"]["lengths"] = results["lengths"]
+                        self.current_eval["results"]["q_means"] = results["q_means"]
+                        self.current_eval["results"]["q_stds"] = results["q_stds"]
+                        self.current_eval["completed_episodes"] = num_episodes
 
-                        if record_video:
-                            video_files = [f for f in os.listdir(video_dir) if f.endswith(".mp4")]
-                            if video_files:
-                                latest_video = sorted(video_files)[-1]
+                        if record_video and results.get("videos"):
+                            for ep_idx, video_path in enumerate(results["videos"]):
+                                if ep_idx < len(results["returns"]):
+                                    self.current_eval["videos"].append({
+                                        "episode": ep_idx,
+                                        "return": results["returns"][ep_idx],
+                                        "length": results["lengths"][ep_idx],
+                                        "path": video_path
+                                    })
+
+                        video_files = list(Path(video_dir).glob("*.mp4"))
+                        for video_file in video_files:
+                            if not any(v["path"] == str(video_file) for v in self.current_eval["videos"]):
                                 self.current_eval["videos"].append({
-                                    "episode": episode,
-                                    "return": ep_return,
-                                    "length": ep_len,
-                                    "path": os.path.join(video_dir, latest_video)
+                                    "episode": len(self.current_eval["videos"]),
+                                    "return": 0.0,
+                                    "length": 0,
+                                    "path": str(video_file)
                                 })
 
-            with self.lock:
-                if self.current_eval:
-                    self.current_eval["status"] = "completed"
-                    self.current_eval["end_time"] = time.time()
+                        self.current_eval["status"] = "completed"
+                        self.current_eval["end_time"] = time.time()
+            else:
+                raise RuntimeError("Evaluation JSON output not found")
 
         except Exception as e:
             with self.lock:
                 if self.current_eval:
                     self.current_eval["status"] = "failed"
                     self.current_eval["error"] = str(e)
+                    self.current_eval["end_time"] = time.time()
             raise
